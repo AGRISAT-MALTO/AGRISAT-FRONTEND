@@ -15,13 +15,19 @@ import { useNavigate } from "react-router-dom";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
 
 function statusFromVerdict(verdict: string | null, culture_detected: string | null): string {
+  // culture_detected ("Orge" / "Non-orge", classification CNN nette) fait foi en priorité.
+  const culture = culture_detected?.toLowerCase().trim() ?? "";
+  const isNonOrge = culture.includes("orge") && culture.includes("non");
+  if (isNonOrge) return "Non conforme";
+  if (culture.includes("orge")) return "Conforme";
+
+  // Pas de classification CNN nette (CNN indisponible) : se reposer sur le verdict texte.
   if (!verdict) return "À vérifier";
   const v = verdict.toUpperCase();
-  if (v.includes("CONFORME") && !v.includes("NON")) return "Conforme";
-  if (v.includes("NON CONFORME")) return "Non conforme";
-  if (v.includes("INCERTAIN")) return "Incertain";
-  if (culture_detected && culture_detected.toLowerCase().includes("orge")) return "Conforme";
-  return "Non conforme";
+  if (v.includes("INCERTAIN") || v.includes("INDÉTERMIN") || v.includes("INDETERMIN")) return "Incertain";
+  if (v.includes("NON-ORGE") || v.includes("NON ORGE")) return "Non conforme";
+  if (v.includes("ORGE")) return "Conforme";
+  return "À vérifier";
 }
 
 function statusBadgeClass(status: string): string {
