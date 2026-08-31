@@ -205,7 +205,7 @@ export default function AnalysisPopup({ position, polygon, center, zoom, onClose
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -10, scale: 0.9 }}
       transition={{ type: "spring", damping: 25, stiffness: 350 }}
-      className="analysis-popup absolute z-[1000] w-[340px] p-4"
+      className="analysis-popup absolute z-[1000] w-[min(380px,calc(100vw-2rem))] p-4"
       style={{ left: position.x, top: position.y, transform: "translate(-50%, -100%)", marginTop: "-12px" }}
     >
       <div className="absolute left-1/2 -translate-x-1/2 -bottom-2 w-4 h-4 rotate-45 bg-card/95 border-r border-b border-border" />
@@ -217,22 +217,29 @@ export default function AnalysisPopup({ position, polygon, center, zoom, onClose
         ✕
       </button>
 
-      <div className="flex items-center gap-2 mb-3">
-        <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-        <span className="text-xs text-muted-foreground mono uppercase tracking-wider">Analyse — {result?.data_source ?? ""}</span>
+      <div className="flex items-center gap-2 mb-1">
+        <div className="w-2 h-2 rounded-full bg-primary animate-pulse shrink-0" />
+        <span className="text-xs font-semibold text-foreground tracking-wide">Analyse</span>
       </div>
+      {result?.data_source && (
+        <p className="mb-3 text-[11px] text-muted-foreground leading-relaxed break-words">{result.data_source}</p>
+      )}
 
       <div className="text-xs text-muted-foreground mono mb-3">
         {center.lat.toFixed(5)}, {center.lng.toFixed(5)} · {polygon.length} pts
       </div>
       {result?.boundary_source && (
-        <p className="mb-3 text-[11px] text-muted-foreground">{result.boundary_source}</p>
+        <p className="mb-3 text-xs text-muted-foreground leading-relaxed">{result.boundary_source}</p>
       )}
 
       {result?.warnings && result.warnings.length > 0 && (
-        <div className="mb-3 rounded-md border border-amber-300/70 bg-amber-100/70 px-2.5 py-2 text-[11px] text-amber-900">
-          <p className="font-semibold">Analyse partielle</p>
-          <p>{result.warnings.join(" · ")}</p>
+        <div className="mb-3 rounded-md border border-amber-300/70 bg-amber-100/70 dark:border-amber-500/40 dark:bg-amber-500/10 px-3 py-2.5 text-amber-900 dark:text-amber-200">
+          <p className="text-xs font-semibold mb-1">⚠️ Analyse partielle</p>
+          <ul className="space-y-1 text-xs leading-relaxed list-disc list-inside">
+            {result.warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
         </div>
       )}
 

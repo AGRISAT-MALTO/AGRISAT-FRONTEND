@@ -181,8 +181,6 @@ export default function CoordinateInput({
           ✕
         </button>
       </div>
-      <p className="text-xs text-muted-foreground mb-1">La recherche utilise les contours agricoles, les images satellite et le modèle HF avant d’afficher les parcelles d’orge.</p>
-      <p className="text-xs text-muted-foreground mb-3">Astuce : glissez ou touchez le repère sur la carte pour choisir un point, les coordonnées se remplissent automatiquement.</p>
       <form onSubmit={handleSubmit} className="space-y-2">
         {locationError && <p className="text-xs text-destructive">{locationError}</p>}
         <Input
@@ -252,19 +250,6 @@ export default function CoordinateInput({
             : <Navigation key="icon" className="w-4 h-4" />}
           <span key="label">{isSearching ? "Analyse HF + satellite..." : "Lancer l’analyse automatique"}</span>
         </Button>
-        <label className="block text-[11px] text-muted-foreground">
-          Seuil de confiance Sentinel-2 (%)
-          <Input
-            type="number"
-            min="50"
-            max="95"
-            step="1"
-            value={simpleConfidencePercent}
-            onChange={(e) => setSimpleConfidencePercent(e.target.value)}
-            className="mt-1 h-8 text-xs bg-background/70"
-          />
-          <span className="mt-1 block text-[10px]">Seules les parcelles classées orge avec au moins cette confiance sont affichées · 50 % à 95 %</span>
-        </label>
       </form>
       {simpleSearchError && <p className="mt-2 text-xs text-destructive">{simpleSearchError}</p>}
       {simpleResult && (
