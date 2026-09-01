@@ -15,18 +15,18 @@ export default function VegetationLegend({ percentage, className }: VegetationLe
   const clamped = percentage != null ? Math.min(100, Math.max(0, percentage)) : null;
 
   return (
-    <div className={cn("z-[800] analysis-popup px-3 py-3 flex flex-col items-center gap-2", className)}>
+    <div className={cn("z-[800] analysis-popup px-2.5 py-2.5 sm:px-3 sm:py-3 flex flex-col items-center gap-1.5 sm:gap-2", className)}>
       <span className="flex items-center gap-1 text-[10px] font-semibold text-foreground tracking-wide">
         <Crosshair className="w-3 h-3 text-primary" />
         NDVI
       </span>
       <div className="flex items-stretch gap-2">
-        <div className="flex flex-col justify-between h-36 text-[9px] text-muted-foreground">
+        <div className="flex flex-col justify-between h-24 sm:h-36 text-[8px] font-normal tracking-tight text-muted-foreground">
           {TICKS.map((tick) => (
             <span key={tick}>{tick}%</span>
           ))}
         </div>
-        <div className="relative w-3 h-36 rounded-full overflow-hidden" style={{ background: GRADIENT }}>
+        <div className="relative w-3 h-24 sm:h-36 rounded-full overflow-hidden" style={{ background: GRADIENT }}>
           {clamped != null && (
             <div
               className="absolute left-1/2 w-4 h-4 -translate-x-1/2 rounded-full border-2 border-white shadow-md bg-foreground"

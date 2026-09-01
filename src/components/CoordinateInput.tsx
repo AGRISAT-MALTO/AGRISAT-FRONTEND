@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DEFAULT_BARLEY_DETECTION_CONFIG, type BarleyDetectionConfig } from "@/lib/barley-detection";
 import { getDetectedBarleySegments, type AutomaticParcelSearchResult } from "@/lib/automatic-parcels";
-import { SOURCE_LABELS } from "@/components/AutomaticParcelOverlays";
 import type { SimpleAnalysisResult } from "@/lib/barley-detect-simple";
 import { LocateFixed, MapPinned, Navigation, Radar, ThermometerSun } from "lucide-react";
 
@@ -40,7 +40,6 @@ export default function CoordinateInput({
   const [validationError, setValidationError] = useState("");
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState("");
-  const detectedSegments = search?.parcels.flatMap(getDetectedBarleySegments) ?? [];
 
   useEffect(() => {
     if (!pickedLocation) return;
@@ -52,6 +51,29 @@ export default function CoordinateInput({
   useEffect(() => {
     if (forceCollapse) setExpanded(false);
   }, [forceCollapse]);
+
+  useEffect(() => {
+    if (!search) return;
+    const segments = search.parcels.flatMap(getDetectedBarleySegments);
+    const isUncertain = search.parcels.some((parcel) => {
+      const verdict = parcel.analysis?.verdict?.toUpperCase() ?? "";
+      return verdict.includes("INCERTAIN") || verdict.includes("INDÉTERMIN") || verdict.includes("INDETERMIN");
+    });
+
+    if (segments.length > 0) {
+      toast.success("Orge détectée avec succès", {
+        description: `${segments.length} objet(s) d’orge confirmé(s) dans la zone.`,
+      });
+    } else if (isUncertain) {
+      toast.warning("Détection incertaine", {
+        description: "Validation terrain recommandée pour confirmer la présence d’orge.",
+      });
+    } else {
+      toast.error("Aucune orge détectée", {
+        description: "La zone analysée ne présente pas de culture d’orge.",
+      });
+    }
+  }, [search]);
 
   const handleUseMyLocation = () => {
     if (!("geolocation" in navigator)) {
@@ -294,54 +316,6 @@ export default function CoordinateInput({
           <p className="text-[11px] text-cyan-800 dark:text-cyan-400">Cyan : segmentation SNIC Sentinel-2 (NDVI/NDRE) + modèle HF. Le fond de carte affiche l'image Sentinel-2 exacte utilisée, uniquement sur cette zone.</p>
         </div>
       )}
-      {search && (
-        <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-foreground">Résultat de la zone</p>
-            <span className="text-xs font-mono text-muted-foreground">{formatGroundRadius(search.radius_km)}</span>
-          </div>
-          {search.parcels.length > 0 && (
-            <p className="text-[11px] text-muted-foreground">
-              Origine des contours : <span className="font-medium text-foreground">
-                {SOURCE_LABELS[search.parcels[0]?.tags.source ?? ""] ?? "Contour détecté"}
-              </span>
-            </p>
-          )}
-          <div className="grid grid-cols-2 gap-2 text-center">
-            <div className="rounded-md bg-background/60 p-2">
-              <p className="text-lg font-semibold text-foreground">{search.candidates_found}</p>
-              <p className="text-[10px] text-muted-foreground">zones candidates</p>
-            </div>
-            <div className="rounded-md bg-yellow-300/30 dark:bg-yellow-400/15 p-2">
-              <p className="text-lg font-semibold text-yellow-700 dark:text-yellow-300">{detectedSegments.length}</p>
-              <p className="text-[10px] text-yellow-800 dark:text-yellow-400">objets d’orge</p>
-            </div>
-          </div>
-          <p className="text-[11px] text-muted-foreground">Rayon terrain réel : {search.radius_km} km · {search.analyzed_count} zone(s) analysée(s) par cellules, puis segmentée(s) par SNIC avant la classification HF.</p>
-          <p className="text-[11px] text-muted-foreground">Degrés-jours requis : {search.threshold} °C · Tbase : {search.base_temperature} °C · période : {search.period_days} jours.</p>
-          {search.notice && <p className="rounded-md bg-amber-100/80 dark:bg-amber-500/15 px-2 py-1.5 text-[11px] text-amber-900 dark:text-amber-300">{search.notice}</p>}
-          <p className="text-[11px] text-yellow-800 dark:text-yellow-400">Jaune : uniquement les objets SNIC que le modèle HF a classifiés comme Orge.</p>
-          {search.candidates_found > search.analyzed_count && <p className="text-[11px] text-amber-700 dark:text-amber-400">La zone contient plus de candidates que la limite d’analyse automatique.</p>}
-          {detectedSegments.length > 0 && (
-            <div className="rounded-md border border-yellow-400/70 bg-yellow-300/20 dark:bg-yellow-400/10 p-2.5 space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold text-yellow-900 dark:text-yellow-300">Objets d’orge détectés</p>
-                <span className="text-[11px] font-medium text-yellow-800 dark:text-yellow-400">{detectedSegments.length} objet(s)</span>
-              </div>
-              {detectedSegments.map((segment, index) => (
-                <div key={`${segment.coordinates[0]?.lat}-${segment.coordinates[0]?.lng}-${index}`} className="rounded-md bg-background/70 p-2 text-[11px] text-foreground space-y-1">
-                  <div className="flex items-center justify-between font-medium">
-                    <span>Parcelle {index + 1}</span>
-                    <span className="text-yellow-700 dark:text-yellow-300">Confiance : {segment.confidence}%</span>
-                  </div>
-                  <p>Surface : {segment.area_ha} ha</p>
-                  <p>NDVI : {segment.ndvi?.toFixed(2) ?? "—"}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -349,9 +323,4 @@ export default function CoordinateInput({
 function toRadiusKm(value: string, unit: "m" | "km"): number {
   const numericValue = Number(value);
   return unit === "m" ? numericValue / 1000 : numericValue;
-}
-
-function formatGroundRadius(radiusKm: number): string {
-  const meters = Math.round(radiusKm * 1000);
-  return meters < 1000 ? `${meters} m au sol` : `${Number(radiusKm.toFixed(2))} km au sol`;
 }

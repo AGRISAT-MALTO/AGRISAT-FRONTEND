@@ -6,10 +6,11 @@ import Sentinel2TileLayer from "./Sentinel2TileLayer";
 import CoordinateInput from "./CoordinateInput";
 import ParcelOverlays from "./ParcelOverlays";
 import PolygonDrawer from "./PolygonDrawer";
-import ParcelCasePanel, { type AnalysisResultData } from "./ParcelCasePanel";
+import ParcelCasePanel, { type AnalysisResultData, type CulturePanelTab } from "./ParcelCasePanel";
 import VegetationChartsPanel from "./VegetationChartsPanel";
 import VegetationLegend from "./VegetationLegend";
 import DateMonthStrip from "./DateMonthStrip";
+import ZoningOverlay from "./ZoningOverlay";
 import { useNavigate } from "react-router-dom";
 import { BarChart3 } from "lucide-react";
 import brocheIconUrl from "@/img/broche.png";
@@ -19,6 +20,7 @@ import type { BarleyDetectionConfig } from "@/lib/barley-detection";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
 import { vegetationColor } from "@/lib/vegetation-color";
 import { computeSurfaceHa } from "@/lib/geo";
+import { computeParcelZoning, type ZoningResult } from "@/lib/zoning";
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
@@ -65,6 +67,10 @@ export default function SatelliteMap() {
   const [selectedParcelle, setSelectedParcelle] = useState<Parcelle | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResultData | null>(null);
   const [selectedMonthIndex, setSelectedMonthIndex] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<CulturePanelTab>("vegetation");
+  const [zoningResult, setZoningResult] = useState<ZoningResult | null>(null);
+  const [zoningLoading, setZoningLoading] = useState(false);
+  const [zoningError, setZoningError] = useState("");
   const caseActive = drawnParcel !== null || selectedParcelle !== null;
   const monthlyPoints = analysisResult?.time_series_s2 ?? [];
   const pointsByMonth = new Map(monthlyPoints.map((p) => [p.date, p]));
@@ -197,12 +203,18 @@ export default function SatelliteMap() {
     map.fitBounds(bounds);
     setSelectedParcelle(null);
     setSelectedMonthIndex(null);
+    setActiveTab("vegetation");
+    setZoningResult(null);
+    setZoningError("");
     setDrawnParcel({ points, center: polygonCenter(points), ownerName, notes });
   }, []);
 
   const handleSelectParcelle = useCallback((parcelle: Parcelle) => {
     setDrawnParcel(null);
     setSelectedMonthIndex(null);
+    setActiveTab("vegetation");
+    setZoningResult(null);
+    setZoningError("");
     setSelectedParcelle(parcelle);
   }, []);
 
@@ -214,6 +226,9 @@ export default function SatelliteMap() {
     setSelectedParcelle(null);
     setAnalysisResult(null);
     setSelectedMonthIndex(null);
+    setActiveTab("vegetation");
+    setZoningResult(null);
+    setZoningError("");
   }, [pickedLocation]);
 
   useEffect(() => {
@@ -238,6 +253,18 @@ export default function SatelliteMap() {
   // seul dans ce cas, il faut déclencher un "resize" puis recadrer sur la parcelle.
   const hasCharts = (analysisResult?.time_series_s2?.length ?? 0) > 0;
   const activePolygonPoints = drawnParcel?.points ?? selectedParcelle?.coordinates ?? null;
+
+  const handleTabChange = useCallback((tab: CulturePanelTab) => {
+    setActiveTab(tab);
+    if (tab !== "zoning" || zoningResult || zoningLoading || !activePolygonPoints) return;
+    setZoningError("");
+    setZoningLoading(true);
+    computeParcelZoning(activePolygonPoints)
+      .then((result) => setZoningResult(result))
+      .catch((error) => setZoningError(error instanceof Error ? error.message : "Erreur inconnue"))
+      .finally(() => setZoningLoading(false));
+  }, [activePolygonPoints, zoningResult, zoningLoading]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -340,7 +367,7 @@ export default function SatelliteMap() {
           />
 
           {caseActive && analysisResult && (
-            <VegetationLegend percentage={selectedNdvi} className="absolute top-24 right-4" />
+            <VegetationLegend percentage={selectedNdvi} className="absolute top-16 right-4 sm:top-24" />
           )}
 
           {/* Dashboard link */}
@@ -360,9 +387,12 @@ export default function SatelliteMap() {
               </p>
             </div>
           )}
+
+          {/* Zones VRA (onglet "Proche en zone") : raster NDVI classé, superposé sur la carte */}
+          <ZoningOverlay map={mapRef.current} result={activeTab === "zoning" ? zoningResult : null} />
         </div>
 
-        {caseActive && hasCharts && (
+        {caseActive && hasCharts && activeTab === "vegetation" && (
           <DateMonthStrip
             months={months}
             selectedIndex={effectiveMonthIndex}
@@ -371,7 +401,7 @@ export default function SatelliteMap() {
           />
         )}
 
-        {caseActive && hasCharts && (
+        {caseActive && hasCharts && activeTab === "vegetation" && (
           <VegetationChartsPanel
             timeSeriesS2={analysisResult?.time_series_s2 ?? []}
             timeSeriesRain={analysisResult?.time_series_rain ?? []}
@@ -396,12 +426,20 @@ export default function SatelliteMap() {
             setDrawnParcel(null);
             setAnalysisResult(null);
             setSelectedMonthIndex(null);
+            setActiveTab("vegetation");
+            setZoningResult(null);
+            setZoningError("");
           }}
           onSave={addParcelle}
           ownerName={drawnParcel.ownerName}
           notes={drawnParcel.notes}
           onResult={setAnalysisResult}
-          className="w-[380px] max-w-[90vw] h-full shrink-0"
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          zoningResult={zoningResult}
+          zoningLoading={zoningLoading}
+          zoningError={zoningError}
+          className="w-[320px] max-w-[85vw] h-full shrink-0"
         />
       )}
 
@@ -413,9 +451,17 @@ export default function SatelliteMap() {
             setSelectedParcelle(null);
             setAnalysisResult(null);
             setSelectedMonthIndex(null);
+            setActiveTab("vegetation");
+            setZoningResult(null);
+            setZoningError("");
           }}
           onResult={setAnalysisResult}
-          className="w-[380px] max-w-[90vw] h-full shrink-0"
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          zoningResult={zoningResult}
+          zoningLoading={zoningLoading}
+          zoningError={zoningError}
+          className="w-[320px] max-w-[85vw] h-full shrink-0"
         />
       )}
     </div>

@@ -1,18 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Parcelle } from "@/hooks/useParcelles";
 
-const htmlEntities: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => htmlEntities[character]);
-}
-
 export type BarleyStatus = "confirmed" | "uncertain" | "non-barley";
 
 const STATUS_COLORS: Record<BarleyStatus, string> = {
@@ -51,23 +39,14 @@ interface ParcelOverlaysProps {
 
 export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverlaysProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
-  const labelsRef = useRef<google.maps.Marker[]>([]);
-  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
 
   useEffect(() => {
     if (!map) return;
 
-    // Clean old polygons and labels
     polygonsRef.current.forEach((p) => p.setMap(null));
     polygonsRef.current = [];
-    labelsRef.current.forEach((m) => m.setMap(null));
-    labelsRef.current = [];
-
-    if (!infoWindowRef.current) {
-      infoWindowRef.current = new google.maps.InfoWindow();
-    }
 
     parcelles.forEach((parcelle) => {
       const path = parcelle.coordinates.map((c) => ({ lat: c.lat, lng: c.lng }));
@@ -84,54 +63,17 @@ export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverl
         map,
       });
 
-      const labelText = parcelle.owner_name?.trim() || parcelle.culture_detected || parcelle.culture_declared || "Parcelle";
-
-      const labelMarker = new google.maps.Marker({
-        position: { lat: parcelle.center_lat, lng: parcelle.center_lng },
-        map,
-        clickable: false,
-        zIndex: 30,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 0,
-        },
-        label: {
-          text: labelText,
-          color: "#111827",
-          fontSize: "12px",
-          fontWeight: "700",
-          className: "parcel-map-label",
-        },
-      });
-      labelsRef.current.push(labelMarker);
-
-      polygon.addListener("mouseover", (e: google.maps.PolyMouseEvent) => {
+      // Pas d'étiquette ni d'infobulle au survol : le clic sur le contour ouvre directement
+      // le panneau de détail existant (ParcelCasePanel), déjà fonctionnel.
+      polygon.addListener("mouseover", () => {
         polygon.setOptions({ fillOpacity: 0.42, strokeWeight: 5 });
-        const owner = escapeHtml(parcelle.owner_name || "Orge détectée");
-        const note = escapeHtml(parcelle.notes || "Contour d’orge détecté automatiquement.");
-        const culture = escapeHtml(parcelle.culture_detected || "Orge");
-        const content = `
-          <div style="font-family:'Space Grotesk',sans-serif;color:#333;min-width:180px;padding:4px">
-            <div style="font-weight:600;font-size:14px;margin-bottom:6px">${owner}</div>
-            <div style="font-size:12px;color:#666;margin-bottom:4px">${note}</div>
-            <div style="font-size:12px;color:#555;margin-bottom:4px">Confiance : ${parcelle.confidence ?? "—"}%</div>
-            <div style="font-size:11px;color:#999">${culture} · NDVI: ${parcelle.ndvi_percentage ?? "—"}%</div>
-          </div>
-        `;
-        infoWindowRef.current!.setContent(content);
-        if (e.latLng) {
-          infoWindowRef.current!.setPosition(e.latLng);
-          infoWindowRef.current!.open(map);
-        }
       });
 
       polygon.addListener("mouseout", () => {
         polygon.setOptions({ fillOpacity: 0.2, strokeWeight: 4 });
-        infoWindowRef.current?.close();
       });
 
       polygon.addListener("click", () => {
-        infoWindowRef.current?.close();
         onSelectRef.current?.(parcelle);
       });
 
@@ -141,8 +83,6 @@ export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverl
     return () => {
       polygonsRef.current.forEach((p) => p.setMap(null));
       polygonsRef.current = [];
-      labelsRef.current.forEach((m) => m.setMap(null));
-      labelsRef.current = [];
     };
   }, [map, parcelles]);
 

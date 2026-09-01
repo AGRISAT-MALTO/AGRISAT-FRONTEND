@@ -4,8 +4,12 @@ import { ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { computeSurfaceHa } from "@/lib/geo";
 import type { Parcelle, TimeSeriesPointS2, TimeSeriesPointS1, TimeSeriesPointRain } from "@/hooks/useParcelles";
+import type { ZoningResult } from "@/lib/zoning";
+import ZoningTabContent from "./ZoningTabContent";
 
 type AnalysisStage = "loading" | "percentage" | "verdict" | "error";
+
+export type CulturePanelTab = "vegetation" | "zoning";
 
 export interface AnalysisResultData {
   percentage: number | null;
@@ -51,6 +55,11 @@ interface ParcelCasePanelCommonProps {
   onClose: () => void;
   onResult?: (result: AnalysisResultData | null) => void;
   className?: string;
+  activeTab: CulturePanelTab;
+  onTabChange: (tab: CulturePanelTab) => void;
+  zoningResult: ZoningResult | null;
+  zoningLoading: boolean;
+  zoningError: string;
 }
 
 /** Dessine + lance une nouvelle analyse (appelle /api/analyze-parcel puis sauvegarde). */
@@ -140,7 +149,7 @@ function InfoRow({ label, value, valueClassName }: { label: string; value: React
 }
 
 export default function ParcelCasePanel(props: ParcelCasePanelProps) {
-  const { onClose, onResult, className } = props;
+  const { onClose, onResult, className, activeTab, onTabChange, zoningResult, zoningLoading, zoningError } = props;
   const polygon = props.mode === "analyze" ? props.polygon : props.parcelle.coordinates;
   const center = props.mode === "analyze" ? props.center : { lat: props.parcelle.center_lat, lng: props.parcelle.center_lng };
   const ownerName = props.mode === "analyze" ? props.ownerName : props.parcelle.owner_name;
@@ -279,10 +288,10 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
       className={cn("analysis-popup flex flex-col overflow-hidden", className)}
     >
       {/* Header */}
-      <div className="flex items-center gap-2 px-3 pt-4 pb-3 border-b border-border shrink-0">
+      <div className="flex items-center gap-2 px-3 pt-3 pb-2.5 border-b border-border shrink-0">
         <button
           onClick={onClose}
-          className="w-7 h-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+          className="w-6 h-6 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
           title="Fermer la fiche"
         >
           <ChevronLeft className="w-4 h-4" />
@@ -297,13 +306,52 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="rounded-md bg-muted/50 px-2.5 py-2">
+      {/* Nav : bascule entre la vue "Végétation Index" (Végétation + Pluie + Culture orge)
+          et "Proche en zone" (zoning VRA, pixel par pixel, superposé sur la carte). */}
+      <div className="flex items-center gap-1 px-3 py-2 border-b border-border shrink-0">
+        <button
+          type="button"
+          onClick={() => onTabChange("vegetation")}
+          className={cn(
+            "flex-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-colors",
+            activeTab === "vegetation" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+          )}
+        >
+          Végétation Index
+        </button>
+        <button
+          type="button"
+          onClick={() => onTabChange("zoning")}
+          className={cn(
+            "flex-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-colors",
+            activeTab === "zoning" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+          )}
+        >
+          Proche en zone
+        </button>
+      </div>
+
+      {activeTab === "zoning" ? (
+        <div className="flex-1 overflow-y-auto px-3 pt-4 pb-3.5">
+          <ZoningTabContent
+            loading={zoningLoading}
+            error={zoningError}
+            result={zoningResult}
+            parcelLabel={savedId ? savedId.slice(0, 8) : "en cours…"}
+            ownerName={ownerName}
+            surfaceHa={surfaceHa}
+            center={center}
+            cultureDetected={result?.culture_detected ?? null}
+          />
+        </div>
+      ) : (
+      <div className="flex-1 overflow-y-auto px-3 py-2.5 space-y-2.5">
+        <div className="grid grid-cols-2 gap-1.5 text-xs">
+          <div className="rounded-md bg-muted/50 px-2 py-1.5">
             <p className="text-[10px] text-muted-foreground">Agriculteur</p>
             <p className="text-foreground font-medium truncate">{ownerName || "—"}</p>
           </div>
-          <div className="rounded-md bg-muted/50 px-2.5 py-2">
+          <div className="rounded-md bg-muted/50 px-2 py-1.5">
             <p className="text-[10px] text-muted-foreground">ID parcelle</p>
             <p className="text-foreground font-medium mono truncate">{savedId ? savedId.slice(0, 8) : "en cours…"}</p>
           </div>
@@ -312,12 +360,8 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
         {result?.percentage != null && (
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] text-muted-foreground">Indice affiché :</span>
-            <span className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-primary text-primary-foreground">NDVI (Sentinel-2)</span>
+            <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-primary text-primary-foreground">NDVI (Sentinel-2)</span>
           </div>
-        )}
-
-        {result?.data_source && (
-          <p className="text-[11px] text-muted-foreground leading-relaxed break-words">{result.data_source}</p>
         )}
 
         <div className="text-xs text-muted-foreground mono">
@@ -340,8 +384,8 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
 
         <AnimatePresence mode="wait">
           {stage === "loading" && (
-            <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center gap-3 py-6">
-              <div className="relative w-12 h-12">
+            <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center gap-2.5 py-5">
+              <div className="relative w-10 h-10">
                 <div className="absolute inset-0 rounded-full border-2 border-muted" />
                 <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
               </div>
@@ -351,15 +395,15 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
           )}
 
           {stage === "error" && (
-            <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center gap-2 py-6">
+            <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center gap-2 py-5">
               <span className="text-destructive text-sm font-medium">Erreur d'analyse</span>
               <span className="text-xs text-muted-foreground text-center">{errorMsg}</span>
             </motion.div>
           )}
 
           {stage === "percentage" && result && (
-            <motion.div key="percentage" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col items-center gap-3 py-4">
-              <span className="text-4xl font-bold text-primary mono">{displayPct != null ? `${displayPct}%` : "—"}</span>
+            <motion.div key="percentage" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="flex flex-col items-center gap-2.5 py-3">
+              <span className="text-3xl font-bold text-primary mono">{displayPct != null ? `${displayPct}%` : "—"}</span>
               {result.percentage != null && (
                 <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
                   <motion.div className={`h-full rounded-full ${barColor(result.percentage)}`} initial={{ width: 0 }} animate={{ width: `${result.percentage}%` }} transition={{ duration: 1, ease: "easeOut" }} />
@@ -370,16 +414,16 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
           )}
 
           {stage === "verdict" && result && (
-            <motion.div key="verdict" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-4">
+            <motion.div key="verdict" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-3">
               {/* NDVI + Hybrid Score */}
-              <div className="flex items-center gap-5">
+              <div className="flex items-center gap-4">
                 <div>
-                  <span className="text-2xl font-bold text-primary mono">{result.percentage != null ? `${result.percentage}%` : "—"}</span>
+                  <span className="text-xl font-bold text-primary mono">{result.percentage != null ? `${result.percentage}%` : "—"}</span>
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wide mt-0.5">NDVI</p>
                 </div>
                 {result.hybrid_score != null && (
                   <div>
-                    <span className={cn("text-2xl font-bold mono", scoreColor(result.hybrid_score))}>{result.hybrid_score}%</span>
+                    <span className={cn("text-xl font-bold mono", scoreColor(result.hybrid_score))}>{result.hybrid_score}%</span>
                     <p className="text-[10px] text-muted-foreground uppercase tracking-wide mt-0.5">Hybride</p>
                   </div>
                 )}
@@ -391,20 +435,51 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
               </div>
 
               {/* Verdict */}
-              <motion.span initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.15 }}
-                className={cn(
-                  "self-start px-3 py-1 rounded-full text-xs font-semibold",
-                  result.is_barley ? "bg-vegetation-high/15 text-vegetation-high" : "bg-destructive/15 text-destructive",
-                )}>
-                {result.verdict}
-              </motion.span>
+              {(() => {
+                const verdictUpper = result.verdict.toUpperCase();
+                const isUncertain =
+                  !result.is_barley ||
+                  verdictUpper.includes("INCERTAIN") ||
+                  verdictUpper.includes("IND\u00C9TERMIN") ||
+                  verdictUpper.includes("INDETERMIN");
+                const withoutIcon = result.verdict.replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, "");
+                const label = isUncertain ? withoutIcon.replace(/\s*\([^)]*\)\s*$/u, "") : withoutIcon;
+
+                if (!isUncertain) {
+                  return (
+                    <motion.span initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.15 }}
+                      className="self-start px-2.5 py-0.5 rounded-full text-xs font-semibold bg-vegetation-high/15 text-vegetation-high animate-glow-pulse-green">
+                      {label}
+                    </motion.span>
+                  );
+                }
+
+                return (
+                  <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.15 }}
+                    className="relative isolate self-start overflow-hidden rounded-full p-[1.5px]">
+                    <div
+                      className={cn(
+                        "absolute inset-[-60%] animate-[spin_3s_linear_infinite]",
+                        result.is_barley ? "text-amber-500" : "text-destructive",
+                      )}
+                      style={{ background: "conic-gradient(from 0deg, transparent, currentColor, transparent 30%)" }}
+                    />
+                    <span className={cn(
+                      "relative z-10 block px-2.5 py-0.5 rounded-full text-xs font-semibold",
+                      result.is_barley ? "bg-amber-500/15 text-amber-600" : "bg-destructive/15 text-destructive",
+                    )}>
+                      {label}
+                    </span>
+                  </motion.div>
+                );
+              })()}
 
               {/* Score Breakdown */}
               {result.agro_breakdown && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
-                  className="space-y-1.5 pt-3 border-t border-border/60">
+                  className="space-y-1.5 pt-2.5 border-t border-border/60">
                   <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Décomposition du score</p>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                     <InfoRow label="CNN" value={`${result.cnn_prob_barley?.toFixed(1) ?? "—"}%`} />
                     <InfoRow label="Agro" value={`${result.agro_score ?? "—"}%`} />
                     <InfoRow label="NDVI" value={`${result.agro_breakdown.ndvi_score}%`} />
@@ -416,24 +491,10 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                 </motion.div>
               )}
 
-              {/* Spectral Indices */}
-              {(result.evi != null || result.savi != null || result.ndwi != null || result.ndre != null) && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25 }}
-                  className="space-y-1.5 pt-3 border-t border-border/60">
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Indices spectraux</p>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                    {result.evi != null && <InfoRow label="EVI" value={`${result.evi}%`} />}
-                    {result.savi != null && <InfoRow label="SAVI" value={`${result.savi}%`} />}
-                    {result.ndwi != null && <InfoRow label="NDWI" value={result.ndwi} />}
-                    {result.ndre != null && <InfoRow label="NDRE" value={result.ndre} />}
-                  </div>
-                </motion.div>
-              )}
-
               {/* Planting Detection Info */}
               {result.estimated_planting_date && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}
-                  className="pt-3 border-t border-border/60 space-y-1">
+                  className="pt-2.5 border-t border-border/60 space-y-1">
                   <p className="text-sm font-medium text-foreground">
                     {growthStageEmoji(result.growth_stage)} {result.growth_stage}
                     {result.days_since_planting != null ? ` · Planté il y a ${result.days_since_planting} j` : ""}
@@ -451,18 +512,12 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
               )}
 
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}
-                className="pt-3 border-t border-border/60 space-y-2 text-xs">
-                <p className="text-muted-foreground leading-relaxed">{result.details}</p>
-
+                className="pt-2.5 border-t border-border/60 space-y-1.5 text-xs">
                 <InfoRow
                   label="Culture"
                   value={result.is_barley ? "Orge" : "Non-orge"}
                   valueClassName={result.is_barley ? "text-vegetation-high" : "text-destructive"}
                 />
-                <p className="text-muted-foreground">
-                  CNN : {result.cnn_prob_barley?.toFixed(1) ?? "—"}% orge / {result.cnn_prob_non_barley?.toFixed(1) ?? "—"}% non-orge
-                  {result.cnn_available === false && " (indisponible)"}
-                </p>
 
                 <InfoRow label="Saison" value={result.saison} />
                 <InfoRow label="Confiance" value={`${result.confidence}%`} />
@@ -471,9 +526,6 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                 )}
                 {result.radar_analysis && <InfoRow label="Radar" value={result.radar_analysis} />}
                 {result.spectral_analysis && <InfoRow label="Spectral" value={result.spectral_analysis} />}
-                {result.recommendations && (
-                  <p className="text-primary/80 italic pt-1">{result.recommendations}</p>
-                )}
                 {savedId && (
                   <p className="text-accent font-medium pt-1">Sauvegardé en base de données</p>
                 )}
@@ -482,6 +534,7 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
           )}
         </AnimatePresence>
       </div>
+      )}
     </motion.div>
   );
 }
