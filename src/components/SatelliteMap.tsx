@@ -6,14 +6,19 @@ import Sentinel2TileLayer from "./Sentinel2TileLayer";
 import CoordinateInput from "./CoordinateInput";
 import ParcelOverlays from "./ParcelOverlays";
 import PolygonDrawer from "./PolygonDrawer";
-import AnalysisPopup from "./AnalysisPopup";
+import ParcelCasePanel, { type AnalysisResultData } from "./ParcelCasePanel";
+import VegetationChartsPanel from "./VegetationChartsPanel";
+import VegetationLegend from "./VegetationLegend";
+import DateMonthStrip from "./DateMonthStrip";
 import { useNavigate } from "react-router-dom";
 import { BarChart3 } from "lucide-react";
 import brocheIconUrl from "@/img/broche.png";
 import { getDetectedBarleySegments, searchAutomaticParcels, type AutomaticParcelSearchResult } from "@/lib/automatic-parcels";
 import { runSimpleAnalysis, type SimpleAnalysisResult } from "@/lib/barley-detect-simple";
 import type { BarleyDetectionConfig } from "@/lib/barley-detection";
-import { useParcelles } from "@/hooks/useParcelles";
+import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
+import { vegetationColor } from "@/lib/vegetation-color";
+import { computeSurfaceHa } from "@/lib/geo";
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
@@ -57,6 +62,23 @@ export default function SatelliteMap() {
   const [isSearchingSimple, setIsSearchingSimple] = useState(false);
   const [simpleSearchError, setSimpleSearchError] = useState("");
   const [drawnParcel, setDrawnParcel] = useState<DrawnParcel | null>(null);
+  const [selectedParcelle, setSelectedParcelle] = useState<Parcelle | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResultData | null>(null);
+  const [selectedMonthIndex, setSelectedMonthIndex] = useState<number | null>(null);
+  const caseActive = drawnParcel !== null || selectedParcelle !== null;
+  const monthlyPoints = analysisResult?.time_series_s2 ?? [];
+  const pointsByMonth = new Map(monthlyPoints.map((p) => [p.date, p]));
+  // La bande de dates couvre toujours les 12 mois de l'année du dernier point de données.
+  const stripYear = monthlyPoints.length > 0
+    ? Number(monthlyPoints[monthlyPoints.length - 1].date.slice(0, 4))
+    : new Date().getFullYear();
+  const months = Array.from({ length: 12 }, (_, i) => `${stripYear}-${String(i + 1).padStart(2, "0")}`);
+  const lastDataMonthIndex = monthlyPoints.length > 0
+    ? months.indexOf(monthlyPoints[monthlyPoints.length - 1].date)
+    : -1;
+  // La bande de dates commence sur le mois le plus récent tant que l'utilisateur n'a rien choisi.
+  const effectiveMonthIndex = selectedMonthIndex ?? (lastDataMonthIndex >= 0 ? lastDataMonthIndex : months.length - 1);
+  const selectedNdvi = pointsByMonth.get(months[effectiveMonthIndex])?.ndvi ?? analysisResult?.percentage ?? null;
   const navigate = useNavigate();
   const { parcelles, addParcelle } = useParcelles();
   const displayedBarleySegmentCount = searchResult?.parcels.reduce(
@@ -173,24 +195,63 @@ export default function SatelliteMap() {
     const bounds = new google.maps.LatLngBounds();
     points.forEach((point) => bounds.extend(point));
     map.fitBounds(bounds);
+    setSelectedParcelle(null);
+    setSelectedMonthIndex(null);
     setDrawnParcel({ points, center: polygonCenter(points), ownerName, notes });
   }, []);
+
+  const handleSelectParcelle = useCallback((parcelle: Parcelle) => {
+    setDrawnParcel(null);
+    setSelectedMonthIndex(null);
+    setSelectedParcelle(parcelle);
+  }, []);
+
+  // Choisir un nouveau point GPS (clic ou glisser le repère) invalide le cas affiché : on
+  // referme le panneau « Culture », on masque les graphiques et le contour dessiné disparaît.
+  useEffect(() => {
+    if (!pickedLocation) return;
+    setDrawnParcel(null);
+    setSelectedParcelle(null);
+    setAnalysisResult(null);
+    setSelectedMonthIndex(null);
+  }, [pickedLocation]);
 
   useEffect(() => {
     drawnPolygonRef.current?.setMap(null);
     drawnPolygonRef.current = null;
     if (!drawnParcel || !mapRef.current) return;
+    const color = vegetationColor(selectedNdvi);
     drawnPolygonRef.current = new google.maps.Polygon({
       paths: drawnParcel.points,
-      strokeColor: "#ef4444",
+      strokeColor: color,
       strokeWeight: 5,
       strokeOpacity: 1,
-      fillColor: "#ef4444",
+      fillColor: color,
       fillOpacity: 0.18,
       zIndex: 40,
       map: mapRef.current,
     });
-  }, [drawnParcel]);
+  }, [drawnParcel, selectedNdvi]);
+
+  // Le dock latéral (ParcelCasePanel) et le bandeau de graphiques (VegetationChartsPanel)
+  // redimensionnent le conteneur de la carte : Google Maps ne redessine pas ses tuiles tout
+  // seul dans ce cas, il faut déclencher un "resize" puis recadrer sur la parcelle.
+  const hasCharts = (analysisResult?.time_series_s2?.length ?? 0) > 0;
+  const activePolygonPoints = drawnParcel?.points ?? selectedParcelle?.coordinates ?? null;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const timer = setTimeout(() => {
+      google.maps.event.trigger(map, "resize");
+      if (activePolygonPoints) {
+        const bounds = new google.maps.LatLngBounds();
+        activePolygonPoints.forEach((point) => bounds.extend(point));
+        map.fitBounds(bounds);
+      }
+    }, 120);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawnParcel, selectedParcelle, hasCharts]);
 
   useEffect(() => () => {
     searchAreaRef.current?.setMap(null);
@@ -212,106 +273,150 @@ export default function SatelliteMap() {
   }
 
   return (
-    <div className="relative w-full h-full overflow-hidden">
-      <GoogleMap
-        mapContainerStyle={mapContainerStyle}
-        center={DEFAULT_CENTER}
-        zoom={DEFAULT_ZOOM}
-        options={mapOptions}
-        onLoad={onMapLoad}
-      />
+    <div className="relative w-full h-full flex overflow-hidden">
+      <div className="relative flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+        <div className="relative flex-1 min-h-0 overflow-hidden">
+          <GoogleMap
+            mapContainerStyle={mapContainerStyle}
+            center={DEFAULT_CENTER}
+            zoom={DEFAULT_ZOOM}
+            options={mapOptions}
+            onLoad={onMapLoad}
+          />
 
-      {!located && (
-        <div className="absolute inset-0 z-[900] flex items-center justify-center bg-background/80 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-4">
-            <div className="relative w-16 h-16">
-              <div className="absolute inset-0 rounded-full border-2 border-muted" />
-              <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          {!located && (
+            <div className="absolute inset-0 z-[900] flex items-center justify-center bg-background/80 backdrop-blur-sm">
+              <div className="flex flex-col items-center gap-4">
+                <div className="relative w-16 h-16">
+                  <div className="absolute inset-0 rounded-full border-2 border-muted" />
+                  <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                </div>
+                <span className="text-foreground font-medium">Localisation en cours...</span>
+                <span className="text-muted-foreground text-sm">Chargement de la carte</span>
+              </div>
             </div>
-            <span className="text-foreground font-medium">Localisation en cours...</span>
-            <span className="text-muted-foreground text-sm">Chargement de la carte</span>
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* Brand */}
-      <div className="absolute top-4 left-4 z-[800] analysis-popup px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className="w-3 h-3 rounded-full bg-primary animate-pulse" />
-          <div>
-            <h1 className="text-sm font-semibold text-foreground">AgriSat</h1>
-            <p className="text-xs text-muted-foreground">Détection IA des cultures</p>
+          {/* Brand */}
+          <div className="absolute top-4 left-4 z-[800] analysis-popup px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="w-3 h-3 rounded-full bg-primary animate-pulse" />
+              <div>
+                <h1 className="text-sm font-semibold text-foreground">AgriSat</h1>
+                <p className="text-xs text-muted-foreground">Détection IA des cultures</p>
+              </div>
+            </div>
           </div>
+
+          {/* Fond Sentinel-2 : uniquement l'image exacte de l'analyse en cours, sur la zone recherchée (pas de fond permanent) */}
+          {simpleResult?.imageTimestampMs != null && (
+            <Sentinel2TileLayer map={mapRef.current} imageTimestampMs={simpleResult.imageTimestampMs} />
+          )}
+
+          {/* Parcelles enregistrées dans la base de données — cliquables pour rouvrir leur fiche */}
+          <ParcelOverlays map={mapRef.current} parcelles={parcelles} onSelect={handleSelectParcelle} />
+
+          {/* Parcels discovered from the GPS search */}
+          <AutomaticParcelOverlays map={mapRef.current} parcels={searchResult?.parcels ?? []} />
+
+          {/* Orge détectée par la pipeline Sentinel-2 (segmentation SNIC) */}
+          <SimpleFieldOverlays map={mapRef.current} result={simpleResult} />
+
+          <PolygonDrawer map={mapRef.current} onPolygonComplete={handlePolygonComplete} />
+
+          {/* Automatic GPS search */}
+          <CoordinateInput
+            onNavigate={handleNavigate}
+            onSearch={handleAutomaticSearch}
+            search={searchResult}
+            isSearching={isSearching}
+            searchError={searchError}
+            onSearchSimple={handleSimpleSearch}
+            simpleResult={simpleResult}
+            isSearchingSimple={isSearchingSimple}
+            simpleSearchError={simpleSearchError}
+            pickedLocation={pickedLocation}
+            forceCollapse={caseActive}
+          />
+
+          {caseActive && analysisResult && (
+            <VegetationLegend percentage={selectedNdvi} className="absolute top-24 right-4" />
+          )}
+
+          {/* Dashboard link */}
+          <button
+            onClick={() => navigate("/dashboard")}
+            className="absolute bottom-8 left-20 z-[850] analysis-popup px-4 py-3 flex items-center gap-2 hover:scale-105 transition-transform"
+          >
+            <BarChart3 className="w-4 h-4 text-primary" />
+            <span className="text-sm text-foreground font-medium">Tableau de bord</span>
+          </button>
+
+          {searchResult && (
+            <div className="absolute bottom-8 left-4 right-32 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-lg z-[800] analysis-popup px-4 py-2.5 animate-fade-in">
+              <p className="text-xs text-muted-foreground">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm border-2 border-yellow-400 mr-2 align-middle" />
+                {displayedBarleySegmentCount} contour(s) d’orge détecté(s) · {searchResult.candidates_found} zone(s) analysée(s)
+              </p>
+            </div>
+          )}
         </div>
+
+        {caseActive && hasCharts && (
+          <DateMonthStrip
+            months={months}
+            selectedIndex={effectiveMonthIndex}
+            onSelect={setSelectedMonthIndex}
+            className="mx-3 mb-2 shrink-0"
+          />
+        )}
+
+        {caseActive && hasCharts && (
+          <VegetationChartsPanel
+            timeSeriesS2={analysisResult?.time_series_s2 ?? []}
+            timeSeriesRain={analysisResult?.time_series_rain ?? []}
+            cropLabel={analysisResult?.culture_detected}
+            surfaceHa={
+              drawnParcel
+                ? Math.round(computeSurfaceHa(drawnParcel.points) * 100) / 100
+                : selectedParcelle?.surface_ha ?? null
+            }
+            className="h-[260px] shrink-0"
+          />
+        )}
       </div>
 
-      {/* Fond Sentinel-2 : uniquement l'image exacte de l'analyse en cours, sur la zone recherchée (pas de fond permanent) */}
-      {simpleResult?.imageTimestampMs != null && (
-        <Sentinel2TileLayer map={mapRef.current} imageTimestampMs={simpleResult.imageTimestampMs} />
-      )}
-
-      {/* Parcelles enregistrées dans la base de données */}
-      <ParcelOverlays map={mapRef.current} parcelles={parcelles} />
-
-      {/* Parcels discovered from the GPS search */}
-      <AutomaticParcelOverlays map={mapRef.current} parcels={searchResult?.parcels ?? []} />
-
-      {/* Orge détectée par la pipeline Sentinel-2 (segmentation SNIC) */}
-      <SimpleFieldOverlays map={mapRef.current} result={simpleResult} />
-
-      <PolygonDrawer map={mapRef.current} onPolygonComplete={handlePolygonComplete} />
-
       {drawnParcel && (
-        <AnalysisPopup
-          position={{ x: window.innerWidth / 2, y: Math.max(120, window.innerHeight / 2) }}
+        <ParcelCasePanel
+          mode="analyze"
           polygon={drawnParcel.points}
           center={drawnParcel.center}
           zoom={mapRef.current?.getZoom() ?? TARGET_ZOOM}
-          onClose={() => setDrawnParcel(null)}
+          onClose={() => {
+            setDrawnParcel(null);
+            setAnalysisResult(null);
+            setSelectedMonthIndex(null);
+          }}
           onSave={addParcelle}
           ownerName={drawnParcel.ownerName}
           notes={drawnParcel.notes}
+          onResult={setAnalysisResult}
+          className="w-[380px] max-w-[90vw] h-full shrink-0"
         />
       )}
 
-      {/* Automatic GPS search */}
-      <CoordinateInput
-        onNavigate={handleNavigate}
-        onSearch={handleAutomaticSearch}
-        search={searchResult}
-        isSearching={isSearching}
-        searchError={searchError}
-        onSearchSimple={handleSimpleSearch}
-        simpleResult={simpleResult}
-        isSearchingSimple={isSearchingSimple}
-        simpleSearchError={simpleSearchError}
-        pickedLocation={pickedLocation}
-      />
-
-      {/* Dashboard link */}
-      <button
-        onClick={() => navigate("/dashboard")}
-        className="absolute bottom-8 left-20 z-[850] analysis-popup px-4 py-3 flex items-center gap-2 hover:scale-105 transition-transform"
-      >
-        <BarChart3 className="w-4 h-4 text-primary" />
-        <span className="text-sm text-foreground font-medium">Tableau de bord</span>
-      </button>
-
-      {located && !searchResult && !isSearching && (
-        <div className="absolute bottom-8 left-4 right-32 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-md z-[800] analysis-popup px-5 py-3 animate-fade-in">
-          <p className="text-sm text-muted-foreground">
-            <span className="text-primary font-medium">Entrez une coordonnée GPS</span> pour rechercher automatiquement les parcelles agricoles alentour
-          </p>
-        </div>
-      )}
-
-      {searchResult && (
-        <div className="absolute bottom-8 left-4 right-32 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-lg z-[800] analysis-popup px-4 py-2.5 animate-fade-in">
-          <p className="text-xs text-muted-foreground">
-            <span className="inline-block w-2.5 h-2.5 rounded-sm border-2 border-yellow-400 mr-2 align-middle" />
-            {displayedBarleySegmentCount} contour(s) d’orge détecté(s) · {searchResult.candidates_found} zone(s) analysée(s)
-          </p>
-        </div>
+      {selectedParcelle && (
+        <ParcelCasePanel
+          mode="view"
+          parcelle={selectedParcelle}
+          onClose={() => {
+            setSelectedParcelle(null);
+            setAnalysisResult(null);
+            setSelectedMonthIndex(null);
+          }}
+          onResult={setAnalysisResult}
+          className="w-[380px] max-w-[90vw] h-full shrink-0"
+        />
       )}
     </div>
   );

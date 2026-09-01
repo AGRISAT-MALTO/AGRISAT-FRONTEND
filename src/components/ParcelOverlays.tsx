@@ -13,7 +13,7 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => htmlEntities[character]);
 }
 
-type BarleyStatus = "confirmed" | "uncertain" | "non-barley";
+export type BarleyStatus = "confirmed" | "uncertain" | "non-barley";
 
 const STATUS_COLORS: Record<BarleyStatus, string> = {
   confirmed: "#fbbf24", // jaune — orge confirmée
@@ -27,7 +27,7 @@ const STATUS_COLORS: Record<BarleyStatus, string> = {
 // score agro même quand le CNN est très confiant sur son verdict ("Non-orge" à 90%) — il ne
 // doit donc pas écraser une classification CNN déjà nette, seulement servir de repli quand
 // culture_detected est absent (CNN indisponible).
-function getBarleyStatus(parcelle: Parcelle): BarleyStatus {
+export function getBarleyStatus(parcelle: Parcelle): BarleyStatus {
   const culture = parcelle.culture_detected?.toLowerCase().trim() ?? "";
   const isNonOrge = culture.includes("orge") && culture.includes("non");
   if (isNonOrge) return "non-barley";
@@ -45,12 +45,16 @@ function getBarleyStatus(parcelle: Parcelle): BarleyStatus {
 interface ParcelOverlaysProps {
   map: google.maps.Map | null;
   parcelles: Parcelle[];
+  /** Appelé au clic sur une parcelle — ouvre son panneau de détail avec les données déjà en base. */
+  onSelect?: (parcelle: Parcelle) => void;
 }
 
-export default function ParcelOverlays({ map, parcelles }: ParcelOverlaysProps) {
+export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverlaysProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
   const labelsRef = useRef<google.maps.Marker[]>([]);
   const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   useEffect(() => {
     if (!map) return;
@@ -124,6 +128,11 @@ export default function ParcelOverlays({ map, parcelles }: ParcelOverlaysProps) 
       polygon.addListener("mouseout", () => {
         polygon.setOptions({ fillOpacity: 0.2, strokeWeight: 4 });
         infoWindowRef.current?.close();
+      });
+
+      polygon.addListener("click", () => {
+        infoWindowRef.current?.close();
+        onSelectRef.current?.(parcelle);
       });
 
       polygonsRef.current.push(polygon);

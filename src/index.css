@@ -50,6 +50,46 @@
     --sidebar-border: 140 5% 85%;
     --sidebar-ring: 142 50% 45%;
   }
+
+  /* Mode nuit — appliqué par défaut à l'écran carte satellite (voir Index.tsx). */
+  .dark {
+    --background: 140 15% 7%;
+    --foreground: 140 10% 92%;
+
+    --card: 140 12% 10%;
+    --card-foreground: 140 10% 92%;
+
+    --popover: 140 12% 10%;
+    --popover-foreground: 140 10% 92%;
+
+    --primary: 142 55% 50%;
+    --primary-foreground: 140 15% 7%;
+
+    --secondary: 35 35% 55%;
+    --secondary-foreground: 140 15% 7%;
+
+    --muted: 140 10% 16%;
+    --muted-foreground: 140 5% 65%;
+
+    --accent: 85 45% 50%;
+    --accent-foreground: 140 15% 7%;
+
+    --destructive: 0 70% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 140 10% 20%;
+    --input: 140 10% 20%;
+    --ring: 142 55% 50%;
+
+    --sidebar-background: 140 15% 9%;
+    --sidebar-foreground: 140 10% 92%;
+    --sidebar-primary: 142 55% 50%;
+    --sidebar-primary-foreground: 140 15% 7%;
+    --sidebar-accent: 140 10% 16%;
+    --sidebar-accent-foreground: 140 10% 92%;
+    --sidebar-border: 140 10% 20%;
+    --sidebar-ring: 142 55% 50%;
+  }
 }
 
 @layer base {
@@ -99,7 +139,7 @@
 
 @layer components {
   .analysis-popup {
-    @apply bg-white/95 backdrop-blur-xl border border-border rounded-xl shadow-2xl;
+    @apply bg-card/95 text-card-foreground backdrop-blur-xl border border-border rounded-xl shadow-2xl;
     box-shadow: 0 0 40px hsl(var(--primary) / 0.15), 0 20px 60px rgba(0, 0, 0, 0.1);
     font-size: 1rem;
   }
@@ -123,5 +163,11 @@
 
   .gm-bundled-control {
     margin-left: 0 !important;
+  }
+
+  /* Masque le bandeau d'attribution Google Maps (Keyboard shortcuts / Imagery © / Terms). */
+  .gm-style-cc,
+  .gm-style-cc + div {
+    display: none !important;
   }
 }

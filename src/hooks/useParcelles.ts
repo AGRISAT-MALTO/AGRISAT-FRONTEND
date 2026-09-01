@@ -13,6 +13,11 @@ export interface TimeSeriesPointS1 {
   vh: number | null;
 }
 
+export interface TimeSeriesPointRain {
+  date: string;
+  precipitation_mm: number | null;
+}
+
 export interface Parcelle {
   id: string;
   label: string;
@@ -38,6 +43,7 @@ export interface Parcelle {
   created_at: string;
   time_series_s2: TimeSeriesPointS2[];
   time_series_s1: TimeSeriesPointS1[];
+  time_series_rain: TimeSeriesPointRain[];
   estimated_planting_date: string | null;
   estimated_harvest_date: string | null;
   days_since_planting: number | null;
@@ -73,6 +79,7 @@ export function useParcelles() {
       notes: typeof value.notes === "string" ? value.notes : "",
       time_series_s2: (value.time_series_s2 as TimeSeriesPointS2[]) || [],
       time_series_s1: (value.time_series_s1 as TimeSeriesPointS1[]) || [],
+      time_series_rain: (value.time_series_rain as TimeSeriesPointRain[]) || [],
       estimated_planting_date: typeof value.estimated_planting_date === "string" ? value.estimated_planting_date : null,
       estimated_harvest_date: typeof value.estimated_harvest_date === "string" ? value.estimated_harvest_date : null,
       days_since_planting: typeof value.days_since_planting === "number" ? value.days_since_planting : null,
