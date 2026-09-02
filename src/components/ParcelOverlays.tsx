@@ -5,11 +5,11 @@ export type BarleyStatus = "confirmed" | "uncertain" | "non-barley";
 
 const STATUS_COLORS: Record<BarleyStatus, string> = {
   confirmed: "#fbbf24", // jaune — orge confirmée
-  uncertain: "#1e3a8a", // bleu marine — orge incertaine
+  uncertain: "#f97316", // orange — orge incertaine
   "non-barley": "#ef4444", // rouge — non-orge
 };
 
-// Orge confirmée -> jaune ; non-orge -> rouge ; incertain -> bleu marine.
+// Orge confirmée -> jaune ; non-orge -> rouge ; incertain -> orange.
 // culture_detected (classification CNN nette : "Orge" / "Non-orge") fait foi en priorité.
 // Le verdict texte agrège CNN+agro et peut dire "INDÉTERMINÉ" par simple désaccord avec le
 // score agro même quand le CNN est très confiant sur son verdict ("Non-orge" à 90%) — il ne

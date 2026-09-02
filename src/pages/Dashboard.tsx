@@ -15,7 +15,12 @@ import { useNavigate } from "react-router-dom";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
 
 function statusFromVerdict(verdict: string | null, culture_detected: string | null): string {
-  // culture_detected ("Orge" / "Non-orge", classification CNN nette) fait foi en priorité.
+  // Le verdict (score hybride CNN+Agro avec pénalité de désaccord) fait foi en priorité :
+  // culture_detected est l'étiquette CNN brute, toujours binaire (jamais "incertain"), donc
+  // la vérifier en premier masquerait systématiquement les cas INCERTAIN/INDÉTERMINÉ.
+  const v = verdict?.toUpperCase() ?? "";
+  if (v.includes("INCERTAIN") || v.includes("INDÉTERMIN") || v.includes("INDETERMIN")) return "Incertain";
+
   const culture = culture_detected?.toLowerCase().trim() ?? "";
   const isNonOrge = culture.includes("orge") && culture.includes("non");
   if (isNonOrge) return "Non conforme";
@@ -23,8 +28,6 @@ function statusFromVerdict(verdict: string | null, culture_detected: string | nu
 
   // Pas de classification CNN nette (CNN indisponible) : se reposer sur le verdict texte.
   if (!verdict) return "À vérifier";
-  const v = verdict.toUpperCase();
-  if (v.includes("INCERTAIN") || v.includes("INDÉTERMIN") || v.includes("INDETERMIN")) return "Incertain";
   if (v.includes("NON-ORGE") || v.includes("NON ORGE")) return "Non conforme";
   if (v.includes("ORGE")) return "Conforme";
   return "À vérifier";
