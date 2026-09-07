@@ -9,24 +9,25 @@ const STATUS_COLORS: Record<BarleyStatus, string> = {
   "non-barley": "#ef4444", // rouge — non-orge
 };
 
-// Orge confirmée -> jaune ; non-orge -> rouge ; incertain -> orange.
-// culture_detected (classification CNN nette : "Orge" / "Non-orge") fait foi en priorité.
-// Le verdict texte agrège CNN+agro et peut dire "INDÉTERMINÉ" par simple désaccord avec le
-// score agro même quand le CNN est très confiant sur son verdict ("Non-orge" à 90%) — il ne
-// doit donc pas écraser une classification CNN déjà nette, seulement servir de repli quand
-// culture_detected est absent (CNN indisponible).
+// Orge confirmée -> jaune ; non-orge -> rouge ; incertain -> orange (repli pour d'anciennes
+// analyses enregistrées avant le passage à deux catégories uniquement).
+// Le verdict (score hybride CNN+agro, seuils orge confirmée/non-orge) fait foi en priorité :
+// culture_detected est l'étiquette CNN brute et peut contredire un verdict hybride qui a
+// basculé grâce au score agro. Il ne sert de repli que si le verdict est absent (CNN et
+// verdict hybride indisponibles).
 export function getBarleyStatus(parcelle: Parcelle): BarleyStatus {
-  const culture = parcelle.culture_detected?.toLowerCase().trim() ?? "";
-  const isNonOrge = culture.includes("orge") && culture.includes("non");
-  if (isNonOrge) return "non-barley";
-  if (culture.includes("orge")) return "confirmed";
-
   const verdict = parcelle.verdict?.toUpperCase() ?? "";
   if (verdict.includes("INCERTAIN") || verdict.includes("INDÉTERMIN") || verdict.includes("INDETERMIN")) {
     return "uncertain";
   }
   if (verdict.includes("NON-ORGE") || verdict.includes("NON ORGE")) return "non-barley";
   if (verdict.includes("ORGE")) return "confirmed";
+
+  const culture = parcelle.culture_detected?.toLowerCase().trim() ?? "";
+  const isNonOrge = culture.includes("orge") && culture.includes("non");
+  if (isNonOrge) return "non-barley";
+  if (culture.includes("orge")) return "confirmed";
+
   return "uncertain";
 }
 

@@ -120,6 +120,16 @@ function resultFromParcelle(p: Parcelle): AnalysisResultData {
   };
 }
 
+/** Le verdict (score hybride CNN+Agro, seuils orge confirmée/probable/incertain) fait foi en
+ * priorité pour l'affichage "Culture" : is_barley/culture_detected reflètent le CNN seul et
+ * peuvent contredire un verdict hybride qui a basculé grâce au score agro. */
+function isBarleyFromVerdict(result: Pick<AnalysisResultData, "verdict" | "is_barley">): boolean {
+  const v = result.verdict?.toUpperCase() ?? "";
+  if (v.includes("NON-ORGE") || v.includes("NON ORGE")) return false;
+  if (v.includes("ORGE")) return true;
+  return result.is_barley;
+}
+
 function growthStageEmoji(stage: string | null | undefined): string {
   if (!stage) return "🌱";
   const s = stage.toLowerCase();
@@ -298,7 +308,7 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
         </button>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-foreground truncate">
-            {result?.culture_detected ? `Culture : ${result.culture_detected}` : "Analyse de parcelle"}
+            {result ? `Culture : ${isBarleyFromVerdict(result) ? "Orge" : "Non-orge"}` : "Analyse de parcelle"}
           </p>
           <p className="text-xs text-muted-foreground mono mt-0.5">
             {surfaceHa} ha · {polygon.length} pts · {headerDate.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" })}
@@ -437,8 +447,9 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
               {/* Verdict */}
               {(() => {
                 const verdictUpper = result.verdict.toUpperCase();
+                const isBarley = isBarleyFromVerdict(result);
                 const isUncertain =
-                  !result.is_barley ||
+                  !isBarley ||
                   verdictUpper.includes("INCERTAIN") ||
                   verdictUpper.includes("IND\u00C9TERMIN") ||
                   verdictUpper.includes("INDETERMIN");
@@ -460,13 +471,13 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                     <div
                       className={cn(
                         "absolute inset-[-60%] animate-[spin_3s_linear_infinite]",
-                        result.is_barley ? "text-amber-500" : "text-destructive",
+                        isBarley ? "text-amber-500" : "text-destructive",
                       )}
                       style={{ background: "conic-gradient(from 0deg, transparent, currentColor, transparent 30%)" }}
                     />
                     <span className={cn(
                       "relative z-10 block px-2.5 py-0.5 rounded-full text-xs font-semibold",
-                      result.is_barley ? "bg-amber-500/15 text-amber-600" : "bg-destructive/15 text-destructive",
+                      isBarley ? "bg-amber-500/15 text-amber-600" : "bg-destructive/15 text-destructive",
                     )}>
                       {label}
                     </span>
@@ -515,8 +526,8 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                 className="pt-2.5 border-t border-border/60 space-y-1.5 text-xs">
                 <InfoRow
                   label="Culture"
-                  value={result.is_barley ? "Orge" : "Non-orge"}
-                  valueClassName={result.is_barley ? "text-vegetation-high" : "text-destructive"}
+                  value={isBarleyFromVerdict(result) ? "Orge" : "Non-orge"}
+                  valueClassName={isBarleyFromVerdict(result) ? "text-vegetation-high" : "text-destructive"}
                 />
 
                 <InfoRow label="Saison" value={result.saison} />

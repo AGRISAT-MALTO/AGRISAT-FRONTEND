@@ -15,22 +15,26 @@ import { useNavigate } from "react-router-dom";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
 
 function statusFromVerdict(verdict: string | null, culture_detected: string | null): string {
-  // Le verdict (score hybride CNN+Agro avec pénalité de désaccord) fait foi en priorité :
-  // culture_detected est l'étiquette CNN brute, toujours binaire (jamais "incertain"), donc
-  // la vérifier en premier masquerait systématiquement les cas INCERTAIN/INDÉTERMINÉ.
+  // Le verdict (score hybride CNN+Agro, seuils orge confirmée/probable/incertain) fait foi
+  // en priorité : c'est lui qui reflète les seuils métier ajustables. culture_detected est
+  // l'étiquette CNN brute (toujours binaire, jamais "incertain") et ne sert que de repli
+  // quand aucun verdict n'est disponible (CNN indisponible côté classification globale).
   const v = verdict?.toUpperCase() ?? "";
   if (v.includes("INCERTAIN") || v.includes("INDÉTERMIN") || v.includes("INDETERMIN")) return "Incertain";
+  if (v.includes("NON-ORGE") || v.includes("NON ORGE")) return "Non conforme";
+  if (v.includes("ORGE")) return "Conforme";
 
   const culture = culture_detected?.toLowerCase().trim() ?? "";
   const isNonOrge = culture.includes("orge") && culture.includes("non");
   if (isNonOrge) return "Non conforme";
   if (culture.includes("orge")) return "Conforme";
 
-  // Pas de classification CNN nette (CNN indisponible) : se reposer sur le verdict texte.
-  if (!verdict) return "À vérifier";
-  if (v.includes("NON-ORGE") || v.includes("NON ORGE")) return "Non conforme";
-  if (v.includes("ORGE")) return "Conforme";
   return "À vérifier";
+}
+
+function statusLabel(status: string): string {
+  if (status === "Conforme") return "Orge confirmé";
+  return status;
 }
 
 function statusBadgeClass(status: string): string {
@@ -330,8 +334,8 @@ export default function Dashboard() {
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div className="bg-gray-50 rounded-lg p-3">
                           <p className="text-xs text-gray-500">Culture (CNN)</p>
-                          <p className={`font-semibold text-base ${selected.culture_detected?.toLowerCase().includes("orge") && !selected.culture_detected?.toLowerCase().includes("non") ? "text-emerald-700" : "text-red-700"}`}>
-                            {selected.culture_detected?.toLowerCase().includes("orge") && !selected.culture_detected?.toLowerCase().includes("non") ? "🌾 Orge" : "❌ Non-orge"}
+                          <p className={`font-semibold text-base ${selected.status === "Conforme" ? "text-emerald-700" : "text-red-700"}`}>
+                            {selected.status === "Conforme" ? "🌾 Orge" : "❌ Non-orge"}
                           </p>
                         </div>
                         <div className="bg-gray-50 rounded-lg p-3">
@@ -393,7 +397,7 @@ export default function Dashboard() {
                       )}
 
                       <div className="flex flex-wrap gap-2">
-                        <Badge className={statusBadgeClass(selected.status)}>{selected.status}</Badge>
+                        <Badge className={statusBadgeClass(selected.status)}>{statusLabel(selected.status)}</Badge>
                         {selected.culture_detected && <Badge variant="outline" className="border-gray-300 text-gray-700">{selected.culture_detected}</Badge>}
                       </div>
 
@@ -466,7 +470,7 @@ export default function Dashboard() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">Tous les statuts</SelectItem>
-                        <SelectItem value="Conforme">Conforme (Orge)</SelectItem>
+                        <SelectItem value="Conforme">Orge confirmé</SelectItem>
                         <SelectItem value="Non conforme">Non conforme</SelectItem>
                         <SelectItem value="Incertain">Incertain</SelectItem>
                       </SelectContent>
@@ -492,14 +496,14 @@ export default function Dashboard() {
                             <TableCell className="font-medium text-gray-900">{row.owner_name || row.id.slice(0, 8)}</TableCell>
                             <TableCell className="text-sm font-mono text-gray-500">{row.center_lat.toFixed(3)}, {row.center_lng.toFixed(3)}</TableCell>
                             <TableCell>
-                              <Badge className={row.culture_detected?.toLowerCase().includes("orge") && !row.culture_detected?.toLowerCase().includes("non") ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-red-100 text-red-700 border-red-200"}>
-                                {row.culture_detected?.toLowerCase().includes("orge") && !row.culture_detected?.toLowerCase().includes("non") ? "🌾 Orge" : "❌ Non-orge"}
+                              <Badge className={row.status === "Conforme" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-red-100 text-red-700 border-red-200"}>
+                                {row.status === "Conforme" ? "🌾 Orge" : "❌ Non-orge"}
                               </Badge>
                             </TableCell>
                             <TableCell className="font-semibold text-gray-900">{row.ndvi_percentage != null ? `${row.ndvi_percentage}%` : "—"}</TableCell>
                             <TableCell className="text-gray-700">{row.evi != null ? `${row.evi}%` : "—"}</TableCell>
                             <TableCell>
-                              <Badge className={statusBadgeClass(row.status)}>{row.status}</Badge>
+                              <Badge className={statusBadgeClass(row.status)}>{statusLabel(row.status)}</Badge>
                             </TableCell>
                             <TableCell>
                               <Button
@@ -836,7 +840,7 @@ export default function Dashboard() {
                                   <Badge variant="outline" className="text-xs border-gray-300">Priorité {i + 1}</Badge>
                                   <span className="font-semibold text-gray-900">{p.owner_name || p.id.slice(0, 8)}</span>
                                 </div>
-                                <Badge className={statusBadgeClass(p.status)}>{p.status}</Badge>
+                                <Badge className={statusBadgeClass(p.status)}>{statusLabel(p.status)}</Badge>
                               </div>
                               <p className="text-sm text-gray-500 font-mono">{p.center_lat.toFixed(5)}, {p.center_lng.toFixed(5)} · {p.surface_ha} ha</p>
                               <p className="text-sm text-gray-600">
