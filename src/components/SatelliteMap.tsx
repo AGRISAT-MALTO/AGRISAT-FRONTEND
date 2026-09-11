@@ -11,6 +11,11 @@ import VegetationChartsPanel from "./VegetationChartsPanel";
 import VegetationLegend from "./VegetationLegend";
 import DateMonthStrip from "./DateMonthStrip";
 import ZoningOverlay from "./ZoningOverlay";
+import ZoneCropsOverlay from "./ZoneCropsOverlay";
+import ZoneCropsPanel from "./ZoneCropsPanel";
+import { fetchZoneCrops, type ZoneCropsResult } from "@/lib/zone-crops";
+import FtwParcelsOverlay from "./FtwParcelsOverlay";
+import FtwParcelsPanel from "./FtwParcelsPanel";
 import { useNavigate } from "react-router-dom";
 import { BarChart3 } from "lucide-react";
 import brocheIconUrl from "@/img/broche.png";
@@ -18,6 +23,7 @@ import { getDetectedBarleySegments, searchAutomaticParcels, type AutomaticParcel
 import { runSimpleAnalysis, type SimpleAnalysisResult } from "@/lib/barley-detect-simple";
 import type { BarleyDetectionConfig } from "@/lib/barley-detection";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
+import { useViewportParcelTracing } from "@/hooks/useViewportParcelTracing";
 import { vegetationColor } from "@/lib/vegetation-color";
 import { computeSurfaceHa } from "@/lib/geo";
 import { computeParcelZoning, type ZoningResult } from "@/lib/zoning";
@@ -28,6 +34,11 @@ const DEFAULT_CENTER = { lat: -19.848219, lng: 47.011882 };
 const DEFAULT_ZOOM = 4;
 const TARGET_ZOOM = 16;
 const ANALYSIS_VIEWPORT_PADDING = 1.25;
+// Délimitation automatique des parcelles visibles à l'écran (modèle JECAM sur
+// image THR, /api/zone-parcels) : lancée à l'ouverture et à chaque arrêt de la
+// carte, zone par zone, sans passer par une analyse. Fields of The World reste
+// désactivé : cette délimitation l'a remplacé.
+const VHR_PARCELS_ENABLED = true;
 const LIBRARIES: ("geometry")[] = ["geometry"];
 
 const mapContainerStyle = { width: "100%", height: "100%" };
@@ -71,6 +82,21 @@ export default function SatelliteMap() {
   const [zoningResult, setZoningResult] = useState<ZoningResult | null>(null);
   const [zoningLoading, setZoningLoading] = useState(false);
   const [zoningError, setZoningError] = useState("");
+  // Parcelles JECAM/CIRAD de la zone, avec leur culture predite (modele LTAE
+  // sur series Sentinel-2). Independant des detections d'orge existantes.
+  const [zoneCrops, setZoneCrops] = useState<ZoneCropsResult | null>(null);
+  const [zoneCropsLoading, setZoneCropsLoading] = useState(false);
+  const [zoneCropsError, setZoneCropsError] = useState<string | null>(null);
+  // Délimitation automatique de TOUTES les parcelles de l'écran : exhaustive,
+  // là où JECAM n'est qu'un échantillon d'environ 2 %.
+  const {
+    result: tracedParcels,
+    loading: tracingLoading,
+    error: tracingError,
+    progress: tracingProgress,
+    zoomTooLow: tracingZoomTooLow,
+    onViewportIdle,
+  } = useViewportParcelTracing();
   const caseActive = drawnParcel !== null || selectedParcelle !== null;
   const monthlyPoints = analysisResult?.time_series_s2 ?? [];
   const pointsByMonth = new Map(monthlyPoints.map((p) => [p.date, p]));
@@ -136,8 +162,9 @@ export default function SatelliteMap() {
     map.panTo(DEFAULT_CENTER);
     map.setZoom(TARGET_ZOOM);
     placeCursorMarker(map, DEFAULT_CENTER);
+    if (VHR_PARCELS_ENABLED) map.addListener("idle", () => onViewportIdle(map));
     setLocated(true);
-  }, [placeCursorMarker]);
+  }, [onViewportIdle, placeCursorMarker]);
 
   const handleNavigate = useCallback((lat: number, lng: number, radiusKm: number) => {
     if (!mapRef.current) return;
@@ -167,10 +194,26 @@ export default function SatelliteMap() {
     });
   }, [pinMarker]);
 
+  const loadZoneCrops = useCallback(async (lat: number, lng: number, radiusM: number) => {
+    setZoneCropsLoading(true);
+    setZoneCropsError(null);
+    setZoneCrops(null);
+    try {
+      setZoneCrops(await fetchZoneCrops(lat, lng, radiusM, { minConfidence: 0 }));
+    } catch (error) {
+      setZoneCropsError(
+        error instanceof Error ? error.message : "Les cultures de la zone n'ont pas pu être chargées.",
+      );
+    } finally {
+      setZoneCropsLoading(false);
+    }
+  }, []);
+
   const handleAutomaticSearch = useCallback(async (lat: number, lng: number, radiusKm: number, config: BarleyDetectionConfig) => {
     setIsSearching(true);
     setSearchError("");
     setSearchResult(null);
+    void loadZoneCrops(lat, lng, radiusKm * 1000);
     try {
       const result = await searchAutomaticParcels(lat, lng, radiusKm, config);
       setSearchResult(result);
@@ -179,12 +222,13 @@ export default function SatelliteMap() {
     } finally {
       setIsSearching(false);
     }
-  }, []);
+  }, [loadZoneCrops]);
 
   const handleSimpleSearch = useCallback(async (lat: number, lng: number, radiusM: number, confidenceThreshold: number, gddConfig: BarleyDetectionConfig) => {
     setIsSearchingSimple(true);
     setSimpleSearchError("");
     setSimpleResult(null);
+    void loadZoneCrops(lat, lng, radiusM);
     try {
       const result = await runSimpleAnalysis(lat, lng, radiusM, { confidenceThreshold, ...gddConfig });
       setSimpleResult(result);
@@ -193,7 +237,7 @@ export default function SatelliteMap() {
     } finally {
       setIsSearchingSimple(false);
     }
-  }, []);
+  }, [loadZoneCrops]);
 
   const handlePolygonComplete = useCallback((points: Array<{ lat: number; lng: number }>, ownerName: string, notes: string) => {
     const map = mapRef.current;
@@ -349,6 +393,12 @@ export default function SatelliteMap() {
           {/* Orge détectée par la pipeline Sentinel-2 (segmentation SNIC) */}
           <SimpleFieldOverlays map={mapRef.current} result={simpleResult} />
 
+          {/* Toutes les parcelles de l'écran, délimitées automatiquement (modèle JECAM sur image THR) */}
+          {VHR_PARCELS_ENABLED && <FtwParcelsOverlay map={mapRef.current} result={tracedParcels} />}
+
+          {/* Parcelles JECAM/CIRAD colorées par culture prédite (modèle LTAE) */}
+          <ZoneCropsOverlay map={mapRef.current} result={zoneCrops} />
+
           <PolygonDrawer map={mapRef.current} onPolygonComplete={handlePolygonComplete} />
 
           {/* Automatic GPS search */}
@@ -368,6 +418,27 @@ export default function SatelliteMap() {
 
           {caseActive && analysisResult && (
             <VegetationLegend percentage={selectedNdvi} className="absolute top-16 right-4 sm:top-24" />
+          )}
+
+          {/* Récapitulatif des cultures de la zone + limites du jeu de données */}
+          {!caseActive && (zoneCrops || zoneCropsLoading || zoneCropsError
+            || tracedParcels || tracingLoading || tracingError || tracingZoomTooLow) && (
+            <div className="absolute bottom-8 right-4 z-[820] flex max-h-[70vh] w-72 max-w-[85vw] flex-col gap-2 overflow-y-auto animate-fade-in">
+              {VHR_PARCELS_ENABLED && (
+                <FtwParcelsPanel
+                  result={tracedParcels}
+                  loading={tracingLoading}
+                  error={tracingError}
+                  progress={tracingProgress}
+                  hint={tracingZoomTooLow ? "Zoomez davantage pour tracer automatiquement les parcelles de l'écran." : null}
+                />
+              )}
+              <ZoneCropsPanel
+                result={zoneCrops}
+                loading={zoneCropsLoading}
+                error={zoneCropsError}
+              />
+            </div>
           )}
 
           {/* Dashboard link */}
