@@ -10,8 +10,8 @@ export const SOURCE_LABELS: Record<string, string> = {
   "osm": "Contour OSM (réel)",
   "database": "Parcelle enregistrée",
   "field-boundary-model": "Modèle IA (U-Net)",
+  "jecam-vhr": "Parcelle tracée (JECAM-VHR)",
   "gee-watershed-segmentation": "Watershed (GEE)",
-  "gee-snic-segmentation": "SNIC (GEE)",
   "satellite-search-cell": "Fenêtre satellite (sans contour)",
 };
 
@@ -26,8 +26,8 @@ export default function AutomaticParcelOverlays({ map, parcels }: AutomaticParce
     polygonsRef.current = [];
     if (!infoWindowRef.current) infoWindowRef.current = new google.maps.InfoWindow();
 
-    // Contour réel de chaque parcelle candidate (Overpass, base, modèle IA, watershed,
-    // SNIC...), indépendamment du résultat de la classification orge — sans ça, le
+    // Contour réel de chaque parcelle candidate (parcelle tracée JECAM-VHR, Overpass, base,
+    // modèle IA, watershed...), indépendamment du résultat de la classification orge — sans ça, le
     // contour tracé par le modèle n'apparaît jamais si la confiance orge est < 70%.
     parcels.forEach((parcel) => {
       const path = cleanPolygonPath(parcel.coordinates);

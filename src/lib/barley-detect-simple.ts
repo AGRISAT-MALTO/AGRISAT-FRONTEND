@@ -1,3 +1,5 @@
+import type { TracedParcelInput } from "@/lib/automatic-parcels";
+
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
 export interface SimpleFieldFeature {
@@ -55,6 +57,8 @@ export async function runSimpleAnalysis(
     baseTemperature?: number;
     threshold?: number;
     periodDays?: number;
+    /** Parcelles déjà tracées (JECAM-VHR) à classer : l'analyse ne segmente plus l'image elle-même. */
+    tracedParcels?: TracedParcelInput[];
   },
 ): Promise<SimpleAnalysisResult> {
   const response = await fetch(`${API_URL}/api/analyze`, {

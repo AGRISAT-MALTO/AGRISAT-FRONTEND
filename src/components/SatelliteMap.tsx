@@ -19,7 +19,12 @@ import FtwParcelsPanel from "./FtwParcelsPanel";
 import { useNavigate } from "react-router-dom";
 import { BarChart3 } from "lucide-react";
 import brocheIconUrl from "@/img/broche.png";
-import { getDetectedBarleySegments, searchAutomaticParcels, type AutomaticParcelSearchResult } from "@/lib/automatic-parcels";
+import {
+  getDetectedBarleySegments,
+  searchAutomaticParcels,
+  tracedParcelsWithinRadius,
+  type AutomaticParcelSearchResult,
+} from "@/lib/automatic-parcels";
 import { runSimpleAnalysis, type SimpleAnalysisResult } from "@/lib/barley-detect-simple";
 import type { BarleyDetectionConfig } from "@/lib/barley-detection";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
@@ -215,14 +220,17 @@ export default function SatelliteMap() {
     setSearchResult(null);
     void loadZoneCrops(lat, lng, radiusKm * 1000);
     try {
-      const result = await searchAutomaticParcels(lat, lng, radiusKm, config);
+      // L'analyse classe les parcelles déjà tracées à l'écran (orge ou non) plutôt que de
+      // re-segmenter l'image.
+      const traced = tracedParcelsWithinRadius(tracedParcels, lat, lng, radiusKm * 1000);
+      const result = await searchAutomaticParcels(lat, lng, radiusKm, config, traced);
       setSearchResult(result);
     } catch (error) {
       setSearchError(error instanceof Error ? error.message : "La recherche automatique a échoué.");
     } finally {
       setIsSearching(false);
     }
-  }, [loadZoneCrops]);
+  }, [loadZoneCrops, tracedParcels]);
 
   const handleSimpleSearch = useCallback(async (lat: number, lng: number, radiusM: number, confidenceThreshold: number, gddConfig: BarleyDetectionConfig) => {
     setIsSearchingSimple(true);
@@ -230,14 +238,15 @@ export default function SatelliteMap() {
     setSimpleResult(null);
     void loadZoneCrops(lat, lng, radiusM);
     try {
-      const result = await runSimpleAnalysis(lat, lng, radiusM, { confidenceThreshold, ...gddConfig });
+      const tracedParcelInputs = tracedParcelsWithinRadius(tracedParcels, lat, lng, radiusM);
+      const result = await runSimpleAnalysis(lat, lng, radiusM, { confidenceThreshold, ...gddConfig, tracedParcels: tracedParcelInputs });
       setSimpleResult(result);
     } catch (error) {
       setSimpleSearchError(error instanceof Error ? error.message : "L'analyse Sentinel-2 a échoué.");
     } finally {
       setIsSearchingSimple(false);
     }
-  }, [loadZoneCrops]);
+  }, [loadZoneCrops, tracedParcels]);
 
   const handlePolygonComplete = useCallback((points: Array<{ lat: number; lng: number }>, ownerName: string, notes: string) => {
     const map = mapRef.current;
@@ -390,7 +399,7 @@ export default function SatelliteMap() {
           {/* Parcels discovered from the GPS search */}
           <AutomaticParcelOverlays map={mapRef.current} parcels={searchResult?.parcels ?? []} />
 
-          {/* Orge détectée par la pipeline Sentinel-2 (segmentation SNIC) */}
+          {/* Orge détectée par la pipeline Sentinel-2 (parcelles tracées JECAM-VHR classées par le CNN) */}
           <SimpleFieldOverlays map={mapRef.current} result={simpleResult} />
 
           {/* Toutes les parcelles de l'écran, délimitées automatiquement (modèle JECAM sur image THR) */}

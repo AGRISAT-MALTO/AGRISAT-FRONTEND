@@ -313,7 +313,7 @@ export default function CoordinateInput({
               ))}
             </div>
           )}
-          <p className="text-[11px] text-cyan-800 dark:text-cyan-400">Cyan : segmentation SNIC Sentinel-2 (NDVI/NDRE) + modèle HF. Le fond de carte affiche l'image Sentinel-2 exacte utilisée, uniquement sur cette zone.</p>
+          <p className="text-[11px] text-cyan-800 dark:text-cyan-400">Cyan : parcelles déjà tracées (JECAM-VHR) classées par le modèle HF sur image Sentinel-2. Le fond de carte affiche l'image Sentinel-2 exacte utilisée, uniquement sur cette zone.</p>
         </div>
       )}
     </div>

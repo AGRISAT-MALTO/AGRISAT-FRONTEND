@@ -1,4 +1,6 @@
 import type { BarleyDetectionConfig } from "@/lib/barley-detection";
+import { featureCenter, outerRing } from "@/lib/viewport-tiles";
+import type { ZoneParcelsResult } from "@/lib/zone-parcels";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -54,11 +56,63 @@ export interface AutomaticParcelSearchResult {
   notice: string | null;
 }
 
-export async function searchAutomaticParcels(lat: number, lng: number, radiusKm: number, config: BarleyDetectionConfig): Promise<AutomaticParcelSearchResult> {
+/** Parcelle déjà tracée à l'écran (JECAM-VHR), envoyée au backend pour être classée entière. */
+export interface TracedParcelInput {
+  coordinates: Array<{ lat: number; lng: number }>;
+}
+
+// Marge sur le rayon : une parcelle dont le centre est un peu au-delà peut encore recouper le
+// cercle. Le backend fait ensuite le test d'intersection exact.
+const TRACED_PARCEL_RADIUS_MARGIN_M = 300;
+/**
+ * Plafond d'envoi : le backend n'analyse que les 48 plus proches et refuse au-delà de 2 000
+ * parcelles (400). Sur un grand rayon, l'écran en compte bien plus.
+ */
+export const MAX_TRACED_PARCELS_SENT = 500;
+const M_PER_DEG_LAT = 110_574;
+const M_PER_DEG_LNG_EQUATOR = 111_320;
+
+/**
+ * Parcelles déjà tracées dont le centre est à moins de `radiusM` (+ marge) du point recherché,
+ * de la plus proche à la plus éloignée, limitées à MAX_TRACED_PARCELS_SENT.
+ */
+export function tracedParcelsWithinRadius(
+  traced: ZoneParcelsResult | null,
+  lat: number,
+  lng: number,
+  radiusM: number,
+): TracedParcelInput[] {
+  if (!traced) return [];
+  const longitudeScale = Math.max(Math.abs(Math.cos((lat * Math.PI) / 180)), 0.1);
+  const maxDistanceM = radiusM + TRACED_PARCEL_RADIUS_MARGIN_M;
+
+  return traced.geojson.features
+    .flatMap((feature) => {
+      const center = featureCenter(feature);
+      const ring = outerRing(feature.geometry);
+      if (!center || !ring || ring.length < 3) return [];
+      const eastM = (center.lng - lng) * M_PER_DEG_LNG_EQUATOR * longitudeScale;
+      const northM = (center.lat - lat) * M_PER_DEG_LAT;
+      const distanceM = Math.hypot(eastM, northM);
+      if (distanceM > maxDistanceM) return [];
+      return [{ distanceM, coordinates: ring.map(([pointLng, pointLat]) => ({ lat: pointLat, lng: pointLng })) }];
+    })
+    .sort((a, b) => a.distanceM - b.distanceM)
+    .slice(0, MAX_TRACED_PARCELS_SENT)
+    .map(({ coordinates }) => ({ coordinates }));
+}
+
+export async function searchAutomaticParcels(
+  lat: number,
+  lng: number,
+  radiusKm: number,
+  config: BarleyDetectionConfig,
+  tracedParcels: TracedParcelInput[] = [],
+): Promise<AutomaticParcelSearchResult> {
   const response = await fetch(`${API_URL}/api/detect-parcels`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ lat, lng, radiusKm, ...config }),
+    body: JSON.stringify({ lat, lng, radiusKm, ...config, tracedParcels }),
   });
   const text = await response.text();
   let data: unknown = null;

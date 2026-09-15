@@ -95,7 +95,7 @@ export function tilesForBounds(
     .slice(0, maxTiles);
 }
 
-function outerRing(geometry: ZoneParcelFeature["geometry"]): number[][] | null {
+export function outerRing(geometry: ZoneParcelFeature["geometry"]): number[][] | null {
   if (geometry.type === "Polygon") return (geometry.coordinates as number[][][])[0] ?? null;
   if (geometry.type === "MultiPolygon") return (geometry.coordinates as number[][][][])[0]?.[0] ?? null;
   return null;

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
-  FIABILITE_LIBELLE,
   fiabilite,
+  libelleFiabilite,
   type ZoneParcelFeature,
   type ZoneParcelsResult,
 } from "@/lib/zone-parcels";
@@ -14,7 +14,7 @@ import {
  * l'image satellite et les parcelles JECAM colorées par culture, affichées
  * au-dessus. La couleur du trait dit la fiabilité attendue selon la surface,
  * pour que l'utilisateur ne donne pas le même crédit à un champ de 2 ha
- * (85 % bien tracés) et à une planche maraîchère de 0,05 ha (0 %).
+ * (environ 78 % bien tracés) et à une planche maraîchère de 0,05 ha (environ 5 %).
  */
 
 interface FtwParcelsOverlayProps {
@@ -50,7 +50,7 @@ export default function FtwParcelsOverlay({ map, result, onSelect }: FtwParcelsO
     if (!infoWindowRef.current) infoWindowRef.current = new google.maps.InfoWindow();
 
     (result?.geojson.features ?? []).forEach((feature) => {
-      const { area_ha, confidence, parcel_id, ftw_id } = feature.properties;
+      const { area_ha, confidence, parcel_id, ftw_id, trace_mode } = feature.properties;
       const niveau = fiabilite(area_ha);
       const style = STYLE[niveau];
 
@@ -77,7 +77,8 @@ export default function FtwParcelsOverlay({ map, result, onSelect }: FtwParcelsO
           const details = document.createElement("div");
           details.style.cssText = "font-size:11px;color:#666;margin-top:4px;line-height:1.6";
           details.innerHTML = [
-            FIABILITE_LIBELLE[niveau],
+            libelleFiabilite(niveau, trace_mode),
+            ...(trace_mode === "mix" ? ["Tracé sur 5 dates d'image"] : []),
             `Score du modèle : ${Math.round(confidence)} / 100`,
             `Réf. ${parcel_id ?? ftw_id ?? "-"}`,
           ].join("<br/>");

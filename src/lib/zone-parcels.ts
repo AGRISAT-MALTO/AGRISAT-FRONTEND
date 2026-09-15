@@ -5,8 +5,8 @@
  * (Delineate Anything ré-entraîné sur les contours du CIRAD, image Esri à
  * ~1,2 m). Calcul à la demande : ~30 s pour 800 m, rayon plafonné à 1 km.
  *
- * Fiabilité mesurée sur 831 parcelles JECAM de test :
- *   > 0,5 ha : 80-85 % bien tracées · 0,1-0,5 ha : 33-69 % · < 0,1 ha : 8 %
+ * Fiabilité mesurée sur 831 parcelles JECAM de test, avec la chaîne du service :
+ *   ≥ 0,5 ha : ~78 % bien tracées · 0,1-0,5 ha : 25-46 % · < 0,1 ha : 5 %
  *
  * La réponse porte `attribution` (Esri, Delineate Anything AGPL-3.0) et
  * `warnings` : afficher les deux.
@@ -24,6 +24,8 @@ export interface ZoneParcelProperties {
   area_ha: number;
   distance_m: number;
   source: "JECAM-VHR" | "FTW";
+  /** "mix" : zone précalculée sur 5 dates d'image ; absent ou "simple" : une image. */
+  trace_mode?: "simple" | "mix";
 }
 
 export interface ZoneParcelFeature {
@@ -69,10 +71,21 @@ export function fiabilite(areaHa: number): Fiabilite {
 }
 
 export const FIABILITE_LIBELLE: Record<Fiabilite, string> = {
-  fiable: "Contour fiable (80-85 % bien tracés)",
-  incertaine: "Contour incertain (33-69 % bien tracés)",
-  faible: "Contour peu fiable (8 % bien tracés sous 0,1 ha)",
+  fiable: "Contour fiable (environ 78 % bien tracés)",
+  incertaine: "Contour incertain (25-46 % bien tracés)",
+  faible: "Contour peu fiable (5 % bien tracés sous 0,1 ha)",
 };
+
+/** Mêmes seuils, taux mesurés en mode mix (5 dates d'image, zones précalculées). */
+export const FIABILITE_LIBELLE_MIX: Record<Fiabilite, string> = {
+  fiable: "Contour fiable (environ 74 % bien tracés)",
+  incertaine: "Contour incertain (29-43 % bien tracés)",
+  faible: "Contour peu fiable (10 % bien tracés sous 0,1 ha)",
+};
+
+export function libelleFiabilite(niveau: Fiabilite, mode?: ZoneParcelProperties["trace_mode"]): string {
+  return (mode === "mix" ? FIABILITE_LIBELLE_MIX : FIABILITE_LIBELLE)[niveau];
+}
 
 /** Réponse d'erreur du backend : `status` distingue une zone refusée (4xx) d'une panne (5xx). */
 export class ZoneParcelsHttpError extends Error {
