@@ -8,14 +8,12 @@ interface SimpleFieldOverlaysProps {
 
 export default function SimpleFieldOverlays({ map, result }: SimpleFieldOverlaysProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
-  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
 
   useEffect(() => {
     if (!map) return;
 
     polygonsRef.current.forEach((polygon) => polygon.setMap(null));
     polygonsRef.current = [];
-    if (!infoWindowRef.current) infoWindowRef.current = new google.maps.InfoWindow();
 
     (result?.features ?? []).forEach((feature) => {
       const ring = feature.geometry.coordinates[0];
@@ -32,31 +30,12 @@ export default function SimpleFieldOverlays({ map, result }: SimpleFieldOverlays
         zIndex: 20,
         map,
       });
-      polygon.addListener("mouseover", (event: google.maps.PolyMouseEvent) => {
+      // Pas d'infobulle au survol : seule la mise en évidence du contour.
+      polygon.addListener("mouseover", () => {
         polygon.setOptions({ fillOpacity: 0.42, strokeWeight: 5 });
-        const { confidence, areaHa, meanNDVI, meanNDRE, imageDate, imageAgeDays, cloudPercentage, barleyPresence } = feature.properties;
-        const content = document.createElement("div");
-        content.style.cssText = "font-family:'Space Grotesk',sans-serif;color:#333;min-width:180px;padding:4px";
-        const title = document.createElement("strong");
-        title.textContent = `Orge (analyse simple) — ${Math.round(confidence * 100)}%`;
-        const details = document.createElement("div");
-        details.style.cssText = "font-size:11px;color:#666;margin-top:4px;line-height:1.6";
-        details.innerHTML = [
-          `${areaHa} ha`,
-          `NDVI : ${meanNDVI != null ? meanNDVI.toFixed(2) : "—"} · NDRE : ${meanNDRE != null ? meanNDRE.toFixed(2) : "—"}`,
-          `Image : ${imageDate ?? "—"} (${imageAgeDays ?? "?"} j) · nuages ${cloudPercentage ?? "?"}%`,
-          `Présence : ${barleyPresence === "confirmed" ? "confirmée par degrés-jours" : "probable (CNN seul)"}`,
-        ].join("<br/>");
-        content.append(title, details);
-        if (event.latLng) {
-          infoWindowRef.current?.setContent(content);
-          infoWindowRef.current?.setPosition(event.latLng);
-          infoWindowRef.current?.open(map);
-        }
       });
       polygon.addListener("mouseout", () => {
         polygon.setOptions({ fillOpacity: 0.2, strokeWeight: 4 });
-        infoWindowRef.current?.close();
       });
       polygonsRef.current.push(polygon);
     });
@@ -64,7 +43,6 @@ export default function SimpleFieldOverlays({ map, result }: SimpleFieldOverlays
     return () => {
       polygonsRef.current.forEach((polygon) => polygon.setMap(null));
       polygonsRef.current = [];
-      infoWindowRef.current?.close();
     };
   }, [map, result]);
 

@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DEFAULT_BARLEY_DETECTION_CONFIG, type BarleyDetectionConfig } from "@/lib/barley-detection";
-import { getDetectedBarleySegments, type AutomaticParcelSearchResult } from "@/lib/automatic-parcels";
+import { getDetectedBarleySegments, isNewlyCultivated, type AutomaticParcelSearchResult } from "@/lib/automatic-parcels";
 import type { SimpleAnalysisResult } from "@/lib/barley-detect-simple";
 import { LocateFixed, MapPinned, Navigation, Radar, ThermometerSun } from "lucide-react";
 
@@ -12,6 +12,8 @@ interface CoordinateInputProps {
   onSearch: (lat: number, lng: number, radiusKm: number, config: BarleyDetectionConfig) => Promise<void>;
   search: AutomaticParcelSearchResult | null;
   isSearching: boolean;
+  /** Étape en cours : traçage de la zone, recherche des parcelles non tracées, analyse. */
+  searchProgress?: string | null;
   searchError: string;
   onSearchSimple: (lat: number, lng: number, radiusKm: number, confidenceThreshold: number, gddConfig: BarleyDetectionConfig) => Promise<void>;
   simpleResult: SimpleAnalysisResult | null;
@@ -24,7 +26,7 @@ interface CoordinateInputProps {
 }
 
 export default function CoordinateInput({
-  onNavigate, onSearch, search, isSearching, searchError,
+  onNavigate, onSearch, search, isSearching, searchProgress, searchError,
   onSearchSimple, simpleResult, isSearchingSimple, simpleSearchError,
   pickedLocation, forceCollapse,
 }: CoordinateInputProps) {
@@ -71,6 +73,13 @@ export default function CoordinateInput({
     } else {
       toast.error("Aucune orge détectée", {
         description: "La zone analysée ne présente pas de culture d’orge.",
+      });
+    }
+
+    const newlyCultivated = search.parcels.filter(isNewlyCultivated).length;
+    if (newlyCultivated > 0) {
+      toast.info("Mise en culture détectée", {
+        description: `${newlyCultivated} parcelle(s) vide(s) auparavant sont maintenant cultivée(s) (image Sentinel-2 récente).`,
       });
     }
   }, [search]);
@@ -171,7 +180,7 @@ export default function CoordinateInput({
       return;
     }
     if (!Number.isFinite(gddConfig.threshold) || gddConfig.threshold < DEFAULT_BARLEY_DETECTION_CONFIG.threshold || gddConfig.threshold > 10000) {
-      setValidationError("Le seuil nécessaire doit être compris entre 2 200 et 10 000 °C.");
+      setValidationError("Le cycle max. doit être compris entre 2 000 et 10 000 °C·j.");
       return;
     }
     if (!Number.isInteger(gddConfig.periodDays) || gddConfig.periodDays < 1 || gddConfig.periodDays > 730) {
@@ -262,14 +271,17 @@ export default function CoordinateInput({
               <Input type="number" min="-20" max="30" step="0.1" value={baseTemperature} onChange={(e) => setBaseTemperature(e.target.value)} className="mt-1 h-8 text-xs bg-background/70" />
             </label>
             <label className="text-[11px] text-muted-foreground">
-              Seuil nécessaire (°C)
+              Cycle max. (°C·j)
               <Input type="number" min={DEFAULT_BARLEY_DETECTION_CONFIG.threshold} max="10000" step="1" value={threshold} onChange={(e) => setThreshold(e.target.value)} className="mt-1 h-8 text-xs bg-background/70" />
             </label>
           </div>
           <label className="block text-[11px] text-muted-foreground">
-            Période de culture (jours)
+            Période de culture max. (jours)
             <Input type="number" min="1" max="730" step="1" value={periodDays} onChange={(e) => setPeriodDays(e.target.value)} className="mt-1 h-8 text-xs bg-background/70" />
           </label>
+          <p className="text-[10px] text-muted-foreground">
+            Comptés depuis la date de semis estimée de chaque parcelle : au-delà, l'orge serait déjà récoltée.
+          </p>
         </div>
         {validationError && <p className="text-xs text-destructive">{validationError}</p>}
         {searchError && <p className="text-xs text-destructive">{searchError}</p>}
@@ -277,8 +289,16 @@ export default function CoordinateInput({
           {isSearching
             ? <span key="icon" className="w-3.5 h-3.5 rounded-full border-2 border-primary-foreground/40 border-t-primary-foreground animate-spin" />
             : <Navigation key="icon" className="w-4 h-4" />}
-          <span key="label">{isSearching ? "Analyse HF + satellite..." : "Lancer l’analyse automatique"}</span>
+          <span key="label">{isSearching ? "Analyse en cours…" : "Lancer l’analyse automatique"}</span>
         </Button>
+        {isSearching && searchProgress && (
+          <p className="text-[11px] text-muted-foreground leading-snug">{searchProgress}</p>
+        )}
+        {!isSearching && (
+          <p className="text-[10px] text-muted-foreground leading-snug">
+            Toutes les parcelles du rayon sont d’abord tracées (30 à 60 s par carré de 1,2 km non encore tracé), puis analysées.
+          </p>
+        )}
       </form>
       {simpleSearchError && <p className="mt-2 text-xs text-destructive">{simpleSearchError}</p>}
       {simpleResult && (
@@ -301,10 +321,7 @@ export default function CoordinateInput({
             Image Sentinel-2 : {simpleResult.imageDate ?? "—"} ({simpleResult.imageAgeDays ?? "?"} j) · nuages {simpleResult.cloudPercentage ?? "?"}% · seuil de confiance {Math.round(simpleResult.confidenceThreshold * 100)}%
           </p>
           <p className="text-[11px] text-muted-foreground">
-            Degrés-jours : {simpleResult.gddCumulative ?? "?"}/{simpleResult.gddThreshold} °C
-            {simpleResult.gddCumulative != null && (simpleResult.gddCumulative >= simpleResult.gddThreshold
-              ? " · présence confirmée"
-              : " · présence probable (CNN seul)")}
+            Présence probable (CNN seul) · confirmation par degrés-jours depuis le semis : analyse automatique uniquement
           </p>
           {simpleResult.warnings.length > 0 && (
             <div className="rounded-md bg-amber-100/80 dark:bg-amber-500/15 px-2 py-1.5 space-y-0.5">

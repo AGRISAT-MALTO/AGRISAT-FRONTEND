@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import {
   CEREAL_COLORS,
   cropColor,
-  cropLabel,
   isCereale,
   type ZoneCropFeature,
   type ZoneCropsResult,
@@ -42,18 +41,17 @@ export default function ZoneCropsOverlay({
   onSelect,
 }: ZoneCropsOverlayProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
-  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
 
   useEffect(() => {
     if (!map) return;
 
     polygonsRef.current.forEach((polygon) => polygon.setMap(null));
     polygonsRef.current = [];
-    if (!infoWindowRef.current) infoWindowRef.current = new google.maps.InfoWindow();
 
     (result?.geojson.features ?? []).forEach((feature) => {
-      const { crop_pred, crop_jecam, confidence, area_ha, year_jecam, parcel_id, distance_m } =
-        feature.properties;
+      const { crop_pred, crop_jecam, confidence } = feature.properties;
+      // Pour l'instant, seules les parcelles d'orge sont affichées (relevé terrain ou prédiction).
+      if (crop_jecam !== "Barley" && crop_pred !== "Barley") return;
       if (confidence != null && confidence < minConfidence) return;
 
       // Une cereale a paille connue de JECAM prime sur la prediction : le
@@ -83,36 +81,13 @@ export default function ZoneCropsOverlay({
           map,
         });
 
-        polygon.addListener("mouseover", (event: google.maps.PolyMouseEvent) => {
+        // Pas d'infobulle au survol : seule la mise en évidence du contour.
+        polygon.addListener("mouseover", () => {
           polygon.setOptions({ fillOpacity: Math.min(fillOpacity + 0.25, 0.9), strokeWeight: 3 });
-
-          const content = document.createElement("div");
-          content.style.cssText =
-            "font-family:'Space Grotesk',sans-serif;color:#333;min-width:200px;padding:4px";
-
-          const title = document.createElement("strong");
-          title.textContent = cereale
-            ? `${cropLabel(crop_jecam)} — relevé au sol`
-            : `${cropLabel(crop_pred)} — ${Math.round((confidence ?? 0) * 100)}%`;
-
-          const details = document.createElement("div");
-          details.style.cssText =
-            "font-size:11px;color:#666;margin-top:4px;line-height:1.6";
-          details.innerHTML = [
-            `Parcelle ${parcel_id} · ${area_ha != null ? `${area_ha} ha` : "surface ?"}`,
-            `Relevé terrain : ${cropLabel(crop_jecam)}${year_jecam ? ` (${year_jecam})` : ""}`,
-            `À ${distance_m} m du point`,
-          ].join("<br/>");
-
-          content.append(title, details);
-          infoWindowRef.current?.setContent(content);
-          if (event.latLng) infoWindowRef.current?.setPosition(event.latLng);
-          infoWindowRef.current?.open(map);
         });
 
         polygon.addListener("mouseout", () => {
           polygon.setOptions({ fillOpacity, strokeWeight: 2 });
-          infoWindowRef.current?.close();
         });
 
         if (onSelect) polygon.addListener("click", () => onSelect(feature));
@@ -124,7 +99,6 @@ export default function ZoneCropsOverlay({
     return () => {
       polygonsRef.current.forEach((polygon) => polygon.setMap(null));
       polygonsRef.current = [];
-      infoWindowRef.current?.close();
     };
   }, [map, result, minConfidence, onSelect]);
 

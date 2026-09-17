@@ -49,6 +49,7 @@ export default function FtwParcelsPanel({ result, loading, error, progress, hint
   }
 
   const { summary, warnings, attribution } = result;
+  const complementCount = result.geojson.features.filter((feature) => feature.properties.source === "S2-COMPLEMENT").length;
 
   return (
     <div className="space-y-3 rounded-lg border border-white/10 bg-black/40 p-4">
@@ -81,6 +82,11 @@ export default function FtwParcelsPanel({ result, loading, error, progress, hint
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-4 bg-[#ffd166]" aria-hidden /> incertain
         </span>
+        {complementCount > 0 && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-0.5 w-4 bg-[#22d3ee]" aria-hidden /> ajoutées ({complementCount})
+          </span>
+        )}
       </div>
 
       {warnings.length > 0 && (

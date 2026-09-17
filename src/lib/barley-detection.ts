@@ -27,7 +27,7 @@ export interface BarleyDetectionResult {
 
 export const DEFAULT_BARLEY_DETECTION_CONFIG: BarleyDetectionConfig = {
   baseTemperature: 0,
-  threshold: 2200,
+  threshold: 2000,
   periodDays: 365,
 };
 

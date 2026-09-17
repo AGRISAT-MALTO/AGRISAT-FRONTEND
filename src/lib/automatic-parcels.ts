@@ -11,7 +11,25 @@ export interface DetectedBarleySegment {
   area_ha: number;
 }
 
+export type CultivationStatus = "vide" | "en_levee" | "residuelle" | "cultivee" | "indetermine";
+
+/** État de culture de la parcelle sur la dernière image Sentinel-2 sans nuages (60 derniers jours). */
+export interface ParcelCultivation {
+  status: CultivationStatus;
+  label: string;
+  /** NDVI moyen de la parcelle, de -1 à 1. */
+  ndvi: number | null;
+  image_date: string | null;
+  cloud_percentage: number | null;
+  /** Dernier mois (AAAA-MM) où la parcelle était nue, avant la période récente. */
+  previous_bare_month: string | null;
+  previous_bare_ndvi: number | null;
+  /** Vide auparavant, végétation aujourd'hui. */
+  newly_cultivated: boolean;
+}
+
 export interface AutomaticParcelAnalysis {
+  cultivation?: ParcelCultivation;
   is_barley?: boolean;
   barley_presence?: "confirmed" | "probable" | "none";
   culture_detected?: string;
@@ -29,9 +47,11 @@ export interface AutomaticParcelAnalysis {
   gdd_base_temperature?: number;
   gdd_start_date?: string;
   gdd_end_date?: string;
+  /** Cycle depuis le semis estimé compatible avec une orge encore au champ. */
   gdd_detected?: boolean;
-  gdd_daily_values?: Array<{ date: string; tmax: number; tmin: number; dj: number }>;
+  gdd_cycle_reason?: string | null;
   gdd_error?: string | null;
+  exclusions?: string[];
   detected_segments?: DetectedBarleySegment[];
 }
 
@@ -81,6 +101,7 @@ export function tracedParcelsWithinRadius(
   lat: number,
   lng: number,
   radiusM: number,
+  maxParcels = MAX_TRACED_PARCELS_SENT,
 ): TracedParcelInput[] {
   if (!traced) return [];
   const longitudeScale = Math.max(Math.abs(Math.cos((lat * Math.PI) / 180)), 0.1);
@@ -98,7 +119,7 @@ export function tracedParcelsWithinRadius(
       return [{ distanceM, coordinates: ring.map(([pointLng, pointLat]) => ({ lat: pointLat, lng: pointLng })) }];
     })
     .sort((a, b) => a.distanceM - b.distanceM)
-    .slice(0, MAX_TRACED_PARCELS_SENT)
+    .slice(0, maxParcels)
     .map(({ coordinates }) => ({ coordinates }));
 }
 
@@ -108,11 +129,12 @@ export async function searchAutomaticParcels(
   radiusKm: number,
   config: BarleyDetectionConfig,
   tracedParcels: TracedParcelInput[] = [],
+  options: { tracedOnly?: boolean } = {},
 ): Promise<AutomaticParcelSearchResult> {
   const response = await fetch(`${API_URL}/api/detect-parcels`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ lat, lng, radiusKm, ...config, tracedParcels }),
+    body: JSON.stringify({ lat, lng, radiusKm, ...config, tracedParcels, tracedOnly: options.tracedOnly ?? false }),
   });
   const text = await response.text();
   let data: unknown = null;
@@ -129,6 +151,64 @@ export async function searchAutomaticParcels(
   }
   if (!data || typeof data !== "object") throw new Error("La recherche a renvoyé une réponse invalide.");
   return data as AutomaticParcelSearchResult;
+}
+
+/**
+ * Parcelles envoyées par requête : le backend en analyse au plus 48 par appel, en ~7 s chacune
+ * sur 4 à la fois, dans un budget de 180 s.
+ */
+export const ANALYSIS_BATCH_SIZE = 40;
+
+/**
+ * Analyse orge de toutes les parcelles d'une zone déjà entièrement tracée, par lots. Les
+ * parcelles restées sans analyse (délai dépassé, service lent) sont renvoyées une seconde fois.
+ */
+export async function analyzeZoneParcels(
+  lat: number,
+  lng: number,
+  radiusKm: number,
+  config: BarleyDetectionConfig,
+  parcels: TracedParcelInput[],
+  onProgress?: (done: number, total: number) => void,
+  search: typeof searchAutomaticParcels = searchAutomaticParcels,
+): Promise<AutomaticParcelSearchResult> {
+  const byId = new Map<string, AutomaticParcel>();
+  let notice: string | null = null;
+
+  const runBatches = async (inputs: TracedParcelInput[]) => {
+    for (let start = 0; start < inputs.length; start += ANALYSIS_BATCH_SIZE) {
+      onProgress?.(Math.min(start, inputs.length), inputs.length);
+      const result = await search(lat, lng, radiusKm, config, inputs.slice(start, start + ANALYSIS_BATCH_SIZE), { tracedOnly: true });
+      notice ??= result.notice;
+      for (const parcel of result.parcels) {
+        const previous = byId.get(parcel.id);
+        if (!previous || (previous.analysis === null && parcel.analysis !== null)) byId.set(parcel.id, parcel);
+      }
+    }
+    onProgress?.(inputs.length, inputs.length);
+  };
+
+  await runBatches(parcels);
+  const unanalysed = [...byId.values()].filter((parcel) => parcel.analysis === null);
+  if (unanalysed.length > 0) await runBatches(unanalysed.map(({ coordinates }) => ({ coordinates })));
+
+  const merged = [...byId.values()];
+  return {
+    center: { lat, lng },
+    radius_km: radiusKm,
+    base_temperature: config.baseTemperature,
+    threshold: config.threshold,
+    period_days: config.periodDays,
+    candidates_found: merged.length,
+    analyzed_count: merged.filter((parcel) => parcel.analysis !== null).length,
+    parcels: merged,
+    notice,
+  };
+}
+
+/** Parcelle vide un des mois précédents et portant aujourd'hui de la végétation (image récente). */
+export function isNewlyCultivated(parcel: AutomaticParcel): boolean {
+  return parcel.analysis?.cultivation?.newly_cultivated === true;
 }
 
 export function isAutomaticBarleyParcel(parcel: AutomaticParcel): boolean {

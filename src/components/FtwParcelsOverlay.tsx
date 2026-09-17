@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
   fiabilite,
-  libelleFiabilite,
   type ZoneParcelFeature,
   type ZoneParcelsResult,
 } from "@/lib/zone-parcels";
@@ -29,6 +28,9 @@ const STYLE = {
   faible: { stroke: "#ffd166", weight: 0.8, opacity: 0.45 },
 } as const;
 
+/** Champ oublié par le modèle, ajouté d'après Sentinel-2 : contour à 10 m près. */
+const COMPLEMENT_STYLE = { stroke: "#22d3ee", weight: 1.4, opacity: 0.9 } as const;
+
 function outerRings(geometry: ZoneParcelFeature["geometry"]): number[][][] {
   if (geometry.type === "Polygon") return [(geometry.coordinates as number[][][])[0]];
   if (geometry.type === "MultiPolygon") {
@@ -40,19 +42,17 @@ function outerRings(geometry: ZoneParcelFeature["geometry"]): number[][][] {
 
 export default function FtwParcelsOverlay({ map, result, onSelect }: FtwParcelsOverlayProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
-  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
 
   useEffect(() => {
     if (!map) return;
 
     polygonsRef.current.forEach((polygon) => polygon.setMap(null));
     polygonsRef.current = [];
-    if (!infoWindowRef.current) infoWindowRef.current = new google.maps.InfoWindow();
 
     (result?.geojson.features ?? []).forEach((feature) => {
-      const { area_ha, confidence, parcel_id, ftw_id, trace_mode } = feature.properties;
-      const niveau = fiabilite(area_ha);
-      const style = STYLE[niveau];
+      const style = feature.properties.source === "S2-COMPLEMENT"
+        ? COMPLEMENT_STYLE
+        : STYLE[fiabilite(feature.properties.area_ha)];
 
       outerRings(feature.geometry).forEach((ring) => {
         if (!ring || ring.length < 3) return;
@@ -67,29 +67,12 @@ export default function FtwParcelsOverlay({ map, result, onSelect }: FtwParcelsO
           map,
         });
 
-        polygon.addListener("mouseover", (event: google.maps.PolyMouseEvent) => {
+        // Pas d'infobulle au survol : seule la mise en évidence du contour.
+        polygon.addListener("mouseover", () => {
           polygon.setOptions({ fillOpacity: 0.22, strokeWeight: style.weight + 1 });
-          const content = document.createElement("div");
-          content.style.cssText =
-            "font-family:'Space Grotesk',sans-serif;color:#333;min-width:200px;padding:4px";
-          const title = document.createElement("strong");
-          title.textContent = `Parcelle détectée — ${area_ha.toFixed(2)} ha`;
-          const details = document.createElement("div");
-          details.style.cssText = "font-size:11px;color:#666;margin-top:4px;line-height:1.6";
-          details.innerHTML = [
-            libelleFiabilite(niveau, trace_mode),
-            ...(trace_mode === "mix" ? ["Tracé sur 5 dates d'image"] : []),
-            `Score du modèle : ${Math.round(confidence)} / 100`,
-            `Réf. ${parcel_id ?? ftw_id ?? "-"}`,
-          ].join("<br/>");
-          content.append(title, details);
-          infoWindowRef.current?.setContent(content);
-          if (event.latLng) infoWindowRef.current?.setPosition(event.latLng);
-          infoWindowRef.current?.open(map);
         });
         polygon.addListener("mouseout", () => {
           polygon.setOptions({ fillOpacity: 0.04, strokeWeight: style.weight });
-          infoWindowRef.current?.close();
         });
         if (onSelect) polygon.addListener("click", () => onSelect(feature));
 
@@ -100,7 +83,6 @@ export default function FtwParcelsOverlay({ map, result, onSelect }: FtwParcelsO
     return () => {
       polygonsRef.current.forEach((polygon) => polygon.setMap(null));
       polygonsRef.current = [];
-      infoWindowRef.current?.close();
     };
   }, [map, result, onSelect]);
 

@@ -19,13 +19,13 @@ describe("barley growing degree days", () => {
     expect(result.isBarleyDetected).toBe(true);
   });
 
-  it("ne confirme pas l’orge avant 2 200 degrés-jours", () => {
+  it("ne confirme pas l’orge avant 2 000 degrés-jours", () => {
     const result = summarizeBarleyDetection(
-      [{ date: "2025-01-01", tmax: 4398, tmin: 0 }],
+      [{ date: "2025-01-01", tmax: 3998, tmin: 0 }],
       DEFAULT_BARLEY_DETECTION_CONFIG
     );
 
-    expect(result.cumulativeGdd).toBe(2199);
+    expect(result.cumulativeGdd).toBe(1999);
     expect(result.isBarleyDetected).toBe(false);
   });
 });

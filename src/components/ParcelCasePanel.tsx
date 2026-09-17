@@ -42,14 +42,80 @@ export interface AnalysisResultData {
   savi?: number | null;
   ndwi?: number | null;
   ndre?: number | null;
+  ndmi?: number | null;
+  cire?: number | null;
+  image_date?: string | null;
   spectral_bands?: Record<string, number | null> | null;
+  parcel_stats?: ParcelStats | null;
+  phenology?: ParcelPhenology | null;
+  environment?: ParcelEnvironment | null;
+  gdd?: ParcelGdd | null;
+  rain_since_planting_mm?: number | null;
+  exclusions?: string[];
+  barley_presence?: "confirmed" | "probable" | "none";
   agro_score?: number | null;
-  agro_breakdown?: { ndvi_score: number; cycle_score: number; radar_score: number; ndvi_trend_score: number };
+  agro_breakdown?: Record<string, number>;
   agro_details?: string;
   hybrid_score?: number | null;
   warnings?: string[];
   boundary_source?: string;
 }
+
+export interface ParcelStatsBand {
+  mean: number | null;
+  median: number | null;
+  min: number | null;
+  max: number | null;
+  std: number | null;
+  p10: number | null;
+  p90: number | null;
+  count: number | null;
+}
+
+export interface ParcelStats {
+  image_date: string;
+  edge_buffer_m: number;
+  bands: Record<string, ParcelStatsBand>;
+}
+
+export interface ParcelPhenology {
+  cycle_detected: boolean;
+  observations_current_season: number;
+  cycles_per_year: number | null;
+  peak_ndvi?: number | null;
+  peak_date?: string | null;
+  onset_date?: string | null;
+  season_length_days?: number | null;
+  cycle_is_current?: boolean;
+}
+
+export interface ParcelEnvironment {
+  dynamic_world: Record<string, number | null> | null;
+  worldcereal: { temporary_crops_fraction: number | null; winter_cereals_fraction: number | null } | null;
+  terrain: { elevation_m: number | null; slope_deg: number | null } | null;
+  soil: { clay_pct: number | null; sand_pct: number | null; soc_g_kg: number | null; ph: number | null } | null;
+}
+
+export interface ParcelGdd {
+  cumulative: number;
+  start_date: string;
+  compatible: boolean | null;
+  reason: string | null;
+}
+
+const AGRO_COMPONENT_LABELS: Record<string, string> = {
+  ndvi_score: "NDVI",
+  cycle_score: "Cycle",
+  phenology_score: "Phénologie",
+  radar_score: "Radar",
+  landcover_score: "Occupation",
+  ndvi_trend_score: "Tendance",
+};
+
+const formatShare = (value: number | null | undefined) => (value != null ? `${Math.round(value * 100)}%` : "—");
+const formatIndex = (value: number | null | undefined) => (value != null ? value.toFixed(2) : "—");
+const formatDay = (value: string | null | undefined) =>
+  value ? new Date(value).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : "—";
 
 interface ParcelCasePanelCommonProps {
   onClose: () => void;
@@ -493,12 +559,73 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                     <InfoRow label="CNN" value={`${result.cnn_prob_barley?.toFixed(1) ?? "—"}%`} />
                     <InfoRow label="Agro" value={`${result.agro_score ?? "—"}%`} />
-                    <InfoRow label="NDVI" value={`${result.agro_breakdown.ndvi_score}%`} />
-                    <InfoRow label="Cycle" value={`${result.agro_breakdown.cycle_score}%`} />
-                    <InfoRow label="Radar" value={`${result.agro_breakdown.radar_score}%`} />
-                    <InfoRow label="Tendance" value={`${result.agro_breakdown.ndvi_trend_score}%`} />
+                    {Object.entries(result.agro_breakdown).map(([key, value]) => (
+                      <InfoRow key={key} label={AGRO_COMPONENT_LABELS[key] ?? key} value={`${value}%`} />
+                    ))}
                   </div>
-                  <p className="text-[10px] text-muted-foreground italic">= 0.6×CNN + 0.4×Agro</p>
+                  <p className="text-[10px] text-muted-foreground italic">= 0.6×CNN + 0.4×Agro · les exclusions priment</p>
+                  {result.exclusions && result.exclusions.length > 0 && (
+                    <ul className="space-y-0.5 text-[11px] text-destructive leading-relaxed list-disc list-inside">
+                      {result.exclusions.map((reason, i) => (
+                        <li key={i}>{reason}</li>
+                      ))}
+                    </ul>
+                  )}
+                </motion.div>
+              )}
+
+              {/* Indicateurs de la parcelle : spectre, phénologie, environnement */}
+              {(result.parcel_stats || result.phenology || result.environment) && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25 }}
+                  className="space-y-1 pt-2.5 border-t border-border/60 text-xs">
+                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Indicateurs de la parcelle</p>
+                  {result.parcel_stats && (() => {
+                    const ndvi = result.parcel_stats.bands.NDVI;
+                    return (
+                      <>
+                        <InfoRow
+                          label="Image"
+                          value={`${formatDay(result.parcel_stats.image_date)} · ${ndvi?.count ?? "—"} px${result.parcel_stats.edge_buffer_m ? ` (bords −${result.parcel_stats.edge_buffer_m} m)` : ""}`}
+                        />
+                        <InfoRow label="NDVI méd. (p10–p90)" value={`${formatIndex(ndvi?.median)} (${formatIndex(ndvi?.p10)}–${formatIndex(ndvi?.p90)}) ± ${formatIndex(ndvi?.std)}`} />
+                      </>
+                    );
+                  })()}
+                  <InfoRow label="NDRE · NDMI" value={`${formatIndex(result.ndre)} · ${formatIndex(result.ndmi)}`} />
+                  {result.phenology && (
+                    <InfoRow
+                      label="Phénologie"
+                      value={result.phenology.cycle_detected
+                        ? `pic ${formatIndex(result.phenology.peak_ndvi)} le ${formatDay(result.phenology.peak_date)} · saison ${result.phenology.season_length_days ?? "—"} j`
+                        : `aucun cycle (${result.phenology.observations_current_season} dates)`}
+                    />
+                  )}
+                  {result.phenology?.cycles_per_year != null && (
+                    <InfoRow label="Cycles par an (3 ans)" value={result.phenology.cycles_per_year} />
+                  )}
+                  {result.gdd && (
+                    <InfoRow
+                      label="Degrés-jours depuis semis"
+                      value={`${result.gdd.cumulative} °C·j`}
+                      valueClassName={result.gdd.compatible === false ? "text-destructive" : undefined}
+                    />
+                  )}
+                  {result.rain_since_planting_mm != null && <InfoRow label="Pluie depuis semis" value={`${result.rain_since_planting_mm} mm`} />}
+                  {result.environment?.dynamic_world && (
+                    <InfoRow
+                      label="Dynamic World"
+                      value={`cultures ${formatShare(result.environment.dynamic_world.crops)} · sol nu ${formatShare(result.environment.dynamic_world.bare)} · arbres ${formatShare(result.environment.dynamic_world.trees)}`}
+                    />
+                  )}
+                  {result.environment?.worldcereal && (
+                    <InfoRow
+                      label="WorldCereal 2021"
+                      value={`cultures ${formatShare(result.environment.worldcereal.temporary_crops_fraction)} · céréales saison sèche ${formatShare(result.environment.worldcereal.winter_cereals_fraction)}`}
+                    />
+                  )}
+                  {result.environment?.terrain && (
+                    <InfoRow label="Relief" value={`${result.environment.terrain.elevation_m ?? "—"} m · pente ${result.environment.terrain.slope_deg ?? "—"}°`} />
+                  )}
                 </motion.div>
               )}
 
@@ -518,6 +645,9 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                     <p className="text-xs text-muted-foreground">
                       Récolte estimée : {new Date(result.estimated_harvest_date).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}
                     </p>
+                  )}
+                  {result.gdd?.reason && (
+                    <p className={cn("text-xs", result.gdd.compatible === false ? "text-destructive" : "text-muted-foreground")}>{result.gdd.reason}</p>
                   )}
                 </motion.div>
               )}

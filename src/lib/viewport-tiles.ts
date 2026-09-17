@@ -95,6 +95,32 @@ export function tilesForBounds(
     .slice(0, maxTiles);
 }
 
+/**
+ * Au-delà, préparer la zone avant l'analyse (traçage de 30 à 60 s par carré, un seul à la fois
+ * car le modèle sature le CPU) prendrait plus d'une demi-heure.
+ */
+export const MAX_ANALYSIS_TILES = 30;
+
+/** Distance entre un point et le point le plus proche d'un carré (0 s'il est dedans). */
+function distanceToTileM(point: LatLng, tile: MapBounds): number {
+  const nearest = {
+    lat: Math.min(Math.max(point.lat, tile.south), tile.north),
+    lng: Math.min(Math.max(point.lng, tile.west), tile.east),
+  };
+  return distanceM(point, nearest);
+}
+
+/**
+ * Tous les carrés qui recoupent un cercle d'analyse, du plus proche au plus éloigné du centre :
+ * ce sont les carrés à tracer pour qu'aucune parcelle du cercle ne reste sans contour.
+ */
+export function tilesForCircle(center: LatLng, radiusM: number): TraceTile[] {
+  const latDelta = radiusM / M_PER_DEG_LAT;
+  const lngDelta = radiusM / (M_PER_DEG_LNG_EQUATOR * longitudeScale(center.lat));
+  const bounds = { south: center.lat - latDelta, north: center.lat + latDelta, west: center.lng - lngDelta, east: center.lng + lngDelta };
+  return tilesForBounds(bounds, center, Number.POSITIVE_INFINITY).filter((tile) => distanceToTileM(center, tile) <= radiusM);
+}
+
 export function outerRing(geometry: ZoneParcelFeature["geometry"]): number[][] | null {
   if (geometry.type === "Polygon") return (geometry.coordinates as number[][][])[0] ?? null;
   if (geometry.type === "MultiPolygon") return (geometry.coordinates as number[][][][])[0]?.[0] ?? null;

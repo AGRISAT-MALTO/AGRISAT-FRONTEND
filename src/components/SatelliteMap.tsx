@@ -20,15 +20,16 @@ import { useNavigate } from "react-router-dom";
 import { BarChart3 } from "lucide-react";
 import brocheIconUrl from "@/img/broche.png";
 import {
+  analyzeZoneParcels,
   getDetectedBarleySegments,
-  searchAutomaticParcels,
+  isNewlyCultivated,
   tracedParcelsWithinRadius,
   type AutomaticParcelSearchResult,
 } from "@/lib/automatic-parcels";
 import { runSimpleAnalysis, type SimpleAnalysisResult } from "@/lib/barley-detect-simple";
 import type { BarleyDetectionConfig } from "@/lib/barley-detection";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
-import { useViewportParcelTracing } from "@/hooks/useViewportParcelTracing";
+import { useViewportParcelTracing, type PreparedZone, type ZonePreparationProgress } from "@/hooks/useViewportParcelTracing";
 import { vegetationColor } from "@/lib/vegetation-color";
 import { computeSurfaceHa } from "@/lib/geo";
 import { computeParcelZoning, type ZoningResult } from "@/lib/zoning";
@@ -76,6 +77,8 @@ export default function SatelliteMap() {
   const [searchResult, setSearchResult] = useState<AutomaticParcelSearchResult | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const [searchProgress, setSearchProgress] = useState<string | null>(null);
+  const [preparedZone, setPreparedZone] = useState<PreparedZone | null>(null);
   const [simpleResult, setSimpleResult] = useState<SimpleAnalysisResult | null>(null);
   const [isSearchingSimple, setIsSearchingSimple] = useState(false);
   const [simpleSearchError, setSimpleSearchError] = useState("");
@@ -101,6 +104,7 @@ export default function SatelliteMap() {
     progress: tracingProgress,
     zoomTooLow: tracingZoomTooLow,
     onViewportIdle,
+    prepareAnalysisZone,
   } = useViewportParcelTracing();
   const caseActive = drawnParcel !== null || selectedParcelle !== null;
   const monthlyPoints = analysisResult?.time_series_s2 ?? [];
@@ -122,6 +126,7 @@ export default function SatelliteMap() {
     (total, parcel) => total + getDetectedBarleySegments(parcel).length,
     0,
   ) ?? 0;
+  const newlyCultivatedCount = searchResult?.parcels.filter(isNewlyCultivated).length ?? 0;
 
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: GOOGLE_MAPS_API_KEY,
@@ -218,19 +223,32 @@ export default function SatelliteMap() {
     setIsSearching(true);
     setSearchError("");
     setSearchResult(null);
+    setPreparedZone(null);
+    setSearchProgress("Vérification du traçage de la zone…");
     void loadZoneCrops(lat, lng, radiusKm * 1000);
     try {
-      // L'analyse classe les parcelles déjà tracées à l'écran (orge ou non) plutôt que de
-      // re-segmenter l'image.
-      const traced = tracedParcelsWithinRadius(tracedParcels, lat, lng, radiusKm * 1000);
-      const result = await searchAutomaticParcels(lat, lng, radiusKm, config, traced);
+      // 1. Aucune parcelle de la zone ne doit rester sans contour : on trace tous les carrés du
+      //    cercle, puis on ajoute les champs que le modèle n'a pas tracés (complément Sentinel-2).
+      const zone = await prepareAnalysisZone({ lat, lng }, radiusKm * 1000, (progress: ZonePreparationProgress) => {
+        setSearchProgress(progress.phase === "tracing"
+          ? `Traçage des parcelles de la zone : ${progress.done}/${progress.total} carré(s)`
+          : `Recherche des parcelles non tracées : ${progress.done}/${progress.total} carré(s)`);
+      });
+      setPreparedZone(zone);
+
+      // 2. Analyse orge de toutes les parcelles de la zone, par lots.
+      const parcels = tracedParcelsWithinRadius(zone.result, lat, lng, radiusKm * 1000, Number.POSITIVE_INFINITY);
+      const result = await analyzeZoneParcels(lat, lng, radiusKm, config, parcels, (done, total) => {
+        setSearchProgress(`Analyse orge : ${done}/${total} parcelle(s)`);
+      });
       setSearchResult(result);
     } catch (error) {
       setSearchError(error instanceof Error ? error.message : "La recherche automatique a échoué.");
     } finally {
       setIsSearching(false);
+      setSearchProgress(null);
     }
-  }, [loadZoneCrops, tracedParcels]);
+  }, [loadZoneCrops, prepareAnalysisZone]);
 
   const handleSimpleSearch = useCallback(async (lat: number, lng: number, radiusM: number, confidenceThreshold: number, gddConfig: BarleyDetectionConfig) => {
     setIsSearchingSimple(true);
@@ -238,7 +256,9 @@ export default function SatelliteMap() {
     setSimpleResult(null);
     void loadZoneCrops(lat, lng, radiusM);
     try {
-      const tracedParcelInputs = tracedParcelsWithinRadius(tracedParcels, lat, lng, radiusM);
+      const zone = await prepareAnalysisZone({ lat, lng }, radiusM);
+      setPreparedZone(zone);
+      const tracedParcelInputs = tracedParcelsWithinRadius(zone.result, lat, lng, radiusM);
       const result = await runSimpleAnalysis(lat, lng, radiusM, { confidenceThreshold, ...gddConfig, tracedParcels: tracedParcelInputs });
       setSimpleResult(result);
     } catch (error) {
@@ -246,7 +266,7 @@ export default function SatelliteMap() {
     } finally {
       setIsSearchingSimple(false);
     }
-  }, [loadZoneCrops, tracedParcels]);
+  }, [loadZoneCrops, prepareAnalysisZone]);
 
   const handlePolygonComplete = useCallback((points: Array<{ lat: number; lng: number }>, ownerName: string, notes: string) => {
     const map = mapRef.current;
@@ -416,6 +436,7 @@ export default function SatelliteMap() {
             onSearch={handleAutomaticSearch}
             search={searchResult}
             isSearching={isSearching}
+            searchProgress={searchProgress}
             searchError={searchError}
             onSearchSimple={handleSimpleSearch}
             simpleResult={simpleResult}
@@ -463,8 +484,26 @@ export default function SatelliteMap() {
             <div className="absolute bottom-8 left-4 right-32 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-lg z-[800] analysis-popup px-4 py-2.5 animate-fade-in">
               <p className="text-xs text-muted-foreground">
                 <span className="inline-block w-2.5 h-2.5 rounded-sm border-2 border-yellow-400 mr-2 align-middle" />
-                {displayedBarleySegmentCount} contour(s) d’orge détecté(s) · {searchResult.candidates_found} zone(s) analysée(s)
+                {displayedBarleySegmentCount} contour(s) d’orge détecté(s) · {searchResult.analyzed_count}/{searchResult.candidates_found} parcelle(s) analysée(s)
               </p>
+              {preparedZone && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm border-2 border-cyan-400 mr-2 align-middle" />
+                  Zone tracée : {preparedZone.coverage.tiles - preparedZone.coverage.failedTiles}/{preparedZone.coverage.tiles} carré(s)
+                  {" · "}{preparedZone.coverage.complementParcels} parcelle(s) non tracée(s) ajoutée(s)
+                  {preparedZone.coverage.coverageAfter != null && ` · surface cultivée couverte ${Math.round(preparedZone.coverage.coverageAfter * 100)} %`}
+                  {preparedZone.coverage.coverageBefore != null && ` (${Math.round(preparedZone.coverage.coverageBefore * 100)} % avant)`}
+                </p>
+              )}
+              {preparedZone?.warnings.map((warning) => (
+                <p key={warning} className="mt-1 text-[11px] text-amber-500">{warning}</p>
+              ))}
+              {newlyCultivatedCount > 0 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm border-2 border-fuchsia-400 mr-2 align-middle" />
+                  {newlyCultivatedCount} parcelle(s) devenue(s) cultivée(s) (vide(s) auparavant)
+                </p>
+              )}
             </div>
           )}
 

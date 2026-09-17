@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_ANALYSIS_TILES,
   TILE_RADIUS_M,
   TILE_SIZE_M,
   featuresInTile,
   mergeTileResults,
   tilesForBounds,
+  tilesForCircle,
 } from "@/lib/viewport-tiles";
 import type { ZoneParcelFeature, ZoneParcelsResult } from "@/lib/zone-parcels";
 
@@ -68,6 +70,28 @@ describe("découpage de l'écran en zones de traçage", () => {
     const shared = square(a.center.lat, a.center.lng);
     expect(featuresInTile([shared], a)).toHaveLength(1);
     expect(featuresInTile([shared], b)).toHaveLength(0);
+  });
+
+  it("couvre tout le cercle d'analyse, bords compris, sans carré hors du cercle", () => {
+    const radiusM = 1_800;
+    const tiles = tilesForCircle(CENTER, radiusM);
+    const lngScale = 111_320 * Math.cos((CENTER.lat * Math.PI) / 180);
+    for (let angle = 0; angle < 360; angle += 15) {
+      for (const distance of [0, radiusM * 0.5, radiusM * 0.999]) {
+        const lat = CENTER.lat + (distance * Math.sin((angle * Math.PI) / 180)) / 110_574;
+        const lng = CENTER.lng + (distance * Math.cos((angle * Math.PI) / 180)) / lngScale;
+        expect(tiles.some((t) => lat >= t.south && lat < t.north && lng >= t.west && lng < t.east)).toBe(true);
+      }
+    }
+    // Chaque carré recoupe le cercle : aucun ne dépasse la diagonale d'un carré au-delà du rayon.
+    for (const tile of tiles) {
+      const east = (tile.center.lng - CENTER.lng) * lngScale;
+      const north = (tile.center.lat - CENTER.lat) * 110_574;
+      expect(Math.hypot(east, north)).toBeLessThanOrEqual(radiusM + Math.hypot(TILE_SIZE_M, TILE_SIZE_M) / 2 + 1);
+    }
+    expect(tilesForCircle(CENTER, 50).length).toBeGreaterThanOrEqual(1);
+    expect(tilesForCircle(CENTER, 50).length).toBeLessThanOrEqual(4);
+    expect(tilesForCircle(CENTER, 3_000).length).toBeLessThanOrEqual(MAX_ANALYSIS_TILES + 10);
   });
 
   it("réunit les zones et retire les avertissements propres à un cercle", () => {
