@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GoogleMap, useJsApiLoader } from "@react-google-maps/api";
 import AutomaticParcelOverlays from "./AutomaticParcelOverlays";
 import SimpleFieldOverlays from "./SimpleFieldOverlays";
@@ -6,21 +6,19 @@ import Sentinel2TileLayer from "./Sentinel2TileLayer";
 import CoordinateInput from "./CoordinateInput";
 import ParcelOverlays from "./ParcelOverlays";
 import PolygonDrawer from "./PolygonDrawer";
+import ParcelOutlineEditor from "./ParcelOutlineEditor";
 import ParcelCasePanel, { type AnalysisResultData, type CulturePanelTab } from "./ParcelCasePanel";
 import VegetationChartsPanel from "./VegetationChartsPanel";
 import VegetationLegend from "./VegetationLegend";
 import DateMonthStrip from "./DateMonthStrip";
 import ZoningOverlay from "./ZoningOverlay";
 import ZoneCropsOverlay from "./ZoneCropsOverlay";
-import ZoneCropsPanel from "./ZoneCropsPanel";
-import { fetchZoneCrops, type ZoneCropsResult } from "@/lib/zone-crops";
+import { fetchZoneCrops, tracedParcelsForCrops, type ZoneCropsResult } from "@/lib/zone-crops";
 import FtwParcelsOverlay from "./FtwParcelsOverlay";
-import FtwParcelsPanel from "./FtwParcelsPanel";
 import { useNavigate } from "react-router-dom";
 import { BarChart3 } from "lucide-react";
 import brocheIconUrl from "@/img/broche.png";
 import {
-  getDetectedBarleySegments,
   searchAutomaticParcels,
   tracedParcelsWithinRadius,
   type AutomaticParcelSearchResult,
@@ -32,6 +30,14 @@ import { useViewportParcelTracing } from "@/hooks/useViewportParcelTracing";
 import { vegetationColor } from "@/lib/vegetation-color";
 import { computeSurfaceHa } from "@/lib/geo";
 import { computeParcelZoning, type ZoningResult } from "@/lib/zoning";
+import {
+  OUTLINE_CORRECTION_SOURCE,
+  applyOutlineCorrections,
+  isOutlineCorrection,
+  sameParcel,
+  type LatLng,
+  type OutlineStyle,
+} from "@/lib/outline-corrections";
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
@@ -80,6 +86,13 @@ export default function SatelliteMap() {
   const [isSearchingSimple, setIsSearchingSimple] = useState(false);
   const [simpleSearchError, setSimpleSearchError] = useState("");
   const [drawnParcel, setDrawnParcel] = useState<DrawnParcel | null>(null);
+  // Contour tracé automatiquement en cours de correction, avant analyse et enregistrement.
+  const [editingOutline, setEditingOutline] = useState<{ points: LatLng[]; style: OutlineStyle } | null>(null);
+  // Pendant un dessin manuel, un clic sur un contour tracé ne doit pas ouvrir l'édition.
+  const drawingRef = useRef(false);
+  const handleDrawingChange = useCallback((drawing: boolean) => {
+    drawingRef.current = drawing;
+  }, []);
   const [selectedParcelle, setSelectedParcelle] = useState<Parcelle | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResultData | null>(null);
   const [selectedMonthIndex, setSelectedMonthIndex] = useState<number | null>(null);
@@ -87,21 +100,17 @@ export default function SatelliteMap() {
   const [zoningResult, setZoningResult] = useState<ZoningResult | null>(null);
   const [zoningLoading, setZoningLoading] = useState(false);
   const [zoningError, setZoningError] = useState("");
-  // Parcelles JECAM/CIRAD de la zone, avec leur culture predite (modele LTAE
-  // sur series Sentinel-2). Independant des detections d'orge existantes.
+  // Cultures de la zone, rendues par parcelle : contours des parcelles tracées à
+  // l'écran, culture prédite par le modèle LTAE sur séries Sentinel-2 (JECAM).
+  // Indépendant des détections d'orge existantes.
   const [zoneCrops, setZoneCrops] = useState<ZoneCropsResult | null>(null);
-  const [zoneCropsLoading, setZoneCropsLoading] = useState(false);
-  const [zoneCropsError, setZoneCropsError] = useState<string | null>(null);
+  // Zone dont les cultures sont affichées : gardée pour recalculer le découpage
+  // quand le traçage automatique livre de nouvelles parcelles.
+  const [zoneCropsQuery, setZoneCropsQuery] =
+    useState<{ lat: number; lng: number; radiusM: number } | null>(null);
   // Délimitation automatique de TOUTES les parcelles de l'écran : exhaustive,
   // là où JECAM n'est qu'un échantillon d'environ 2 %.
-  const {
-    result: tracedParcels,
-    loading: tracingLoading,
-    error: tracingError,
-    progress: tracingProgress,
-    zoomTooLow: tracingZoomTooLow,
-    onViewportIdle,
-  } = useViewportParcelTracing();
+  const { result: rawTracedParcels, onViewportIdle, traceZone } = useViewportParcelTracing();
   const caseActive = drawnParcel !== null || selectedParcelle !== null;
   const monthlyPoints = analysisResult?.time_series_s2 ?? [];
   const pointsByMonth = new Map(monthlyPoints.map((p) => [p.date, p]));
@@ -117,11 +126,19 @@ export default function SatelliteMap() {
   const effectiveMonthIndex = selectedMonthIndex ?? (lastDataMonthIndex >= 0 ? lastDataMonthIndex : months.length - 1);
   const selectedNdvi = pointsByMonth.get(months[effectiveMonthIndex])?.ndvi ?? analysisResult?.percentage ?? null;
   const navigate = useNavigate();
-  const { parcelles, addParcelle } = useParcelles();
-  const displayedBarleySegmentCount = searchResult?.parcels.reduce(
-    (total, parcel) => total + getDetectedBarleySegments(parcel).length,
-    0,
-  ) ?? 0;
+  const { parcelles, addParcelle, deleteParcelle } = useParcelles();
+  // Contours corrigés à la main : ils remplacent les parcelles tracées qu'ils recouvrent
+  // (même couleur, nouvelle forme) au lieu d'être dessinés comme parcelles enregistrées.
+  const outlineCorrections = useMemo(() => parcelles.filter(isOutlineCorrection), [parcelles]);
+  const savedParcelles = useMemo(() => parcelles.filter((p) => !isOutlineCorrection(p)), [parcelles]);
+  // Le rechargement périodique des parcelles recrée le tableau : on ne recalcule le
+  // traçage corrigé (et donc la carte des cultures) que si les corrections changent.
+  const correctionsKey = outlineCorrections.map((c) => c.id).join(",");
+  const tracedParcels = useMemo(
+    () => applyOutlineCorrections(rawTracedParcels, outlineCorrections),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rawTracedParcels, correctionsKey],
+  );
 
   const { isLoaded } = useJsApiLoader({
     googleMapsApiKey: GOOGLE_MAPS_API_KEY,
@@ -197,22 +214,40 @@ export default function SatelliteMap() {
       fillOpacity: 0,
       map,
     });
-  }, [pinMarker]);
 
-  const loadZoneCrops = useCallback(async (lat: number, lng: number, radiusM: number) => {
-    setZoneCropsLoading(true);
-    setZoneCropsError(null);
+    // L'écran ne couvre pas toujours toute la zone (zoom trop faible, plafond de
+    // carrés par vue) : on trace explicitement chaque parcelle du cercle.
+    if (VHR_PARCELS_ENABLED) traceZone(lat, lng, radiusKm * 1000);
+  }, [pinMarker, traceZone]);
+
+  // Les parcelles déjà tracées servent de découpage : la culture est rendue
+  // parcelle par parcelle au lieu de colorier des îlots JECAM de plusieurs
+  // dizaines d'hectares. Sans traçage sur la zone, on retombe sur les contours
+  // JECAM, et les îlots trop gros ne sont dessinés qu'en contour.
+  const loadZoneCrops = useCallback((lat: number, lng: number, radiusM: number) => {
     setZoneCrops(null);
-    try {
-      setZoneCrops(await fetchZoneCrops(lat, lng, radiusM, { minConfidence: 0 }));
-    } catch (error) {
-      setZoneCropsError(
-        error instanceof Error ? error.message : "Les cultures de la zone n'ont pas pu être chargées.",
-      );
-    } finally {
-      setZoneCropsLoading(false);
-    }
+    setZoneCropsQuery({ lat, lng, radiusM });
   }, []);
+
+  // Le traçage avance carré par carré (~35 s chacun) : on redemande la carte des
+  // cultures à chaque nouveau carré, ce qui l'affine progressivement au lieu de
+  // la figer sur l'état du traçage au lancement de l'analyse.
+  useEffect(() => {
+    if (!zoneCropsQuery) return;
+    const { lat, lng, radiusM } = zoneCropsQuery;
+    const controller = new AbortController();
+    fetchZoneCrops(lat, lng, radiusM, {
+      minConfidence: 0,
+      parcels: tracedParcelsForCrops(tracedParcels, lat, lng, radiusM),
+      signal: controller.signal,
+    })
+      .then(setZoneCrops)
+      .catch((error) => {
+        // Pas de panneau récapitulatif : un échec laisse simplement la carte sans parcelles colorées.
+        if (!controller.signal.aborted) console.warn("[MAP] Cultures de la zone indisponibles :", error);
+      });
+    return () => controller.abort();
+  }, [zoneCropsQuery, tracedParcels]);
 
   const handleAutomaticSearch = useCallback(async (lat: number, lng: number, radiusKm: number, config: BarleyDetectionConfig) => {
     setIsSearching(true);
@@ -262,7 +297,69 @@ export default function SatelliteMap() {
     setDrawnParcel({ points, center: polygonCenter(points), ownerName, notes });
   }, []);
 
+  // Clic sur une parcelle tracée automatiquement : son contour passe en édition, dans sa
+  // couleur, puis sa nouvelle forme est enregistrée telle quelle en base, sans analyse.
+  const handleEditTracedOutline = useCallback((_feature: unknown, points: LatLng[], style: OutlineStyle) => {
+    if (points.length < 3 || drawingRef.current) return;
+    setDrawnParcel(null);
+    setSelectedParcelle(null);
+    setAnalysisResult(null);
+    setEditingOutline({ points, style });
+  }, []);
+
+  // Parcelle déjà corrigée qu'on retouche : la nouvelle forme remplace l'ancienne en base.
+  const previousCorrections = useMemo(
+    () => (editingOutline ? outlineCorrections.filter((c) => sameParcel(c.coordinates, editingOutline.points)) : []),
+    [editingOutline, outlineCorrections],
+  );
+
+  const handleOutlineSave = useCallback(async (points: LatLng[], ownerName: string, notes: string) => {
+    const center = polygonCenter(points);
+    await addParcelle({
+      label: ownerName,
+      coordinates: points,
+      center_lat: center.lat,
+      center_lng: center.lng,
+      surface_ha: Math.round(computeSurfaceHa(points) * 100) / 100,
+      culture_declared: "",
+      culture_detected: null,
+      ndvi_percentage: null,
+      ndre: null,
+      spectral_bands: null,
+      confidence: null,
+      verdict: null,
+      details: null,
+      saison: null,
+      soil_type: null,
+      risk_factors: [],
+      recommendations: null,
+      data_source: OUTLINE_CORRECTION_SOURCE,
+      owner_name: ownerName,
+      notes,
+      time_series_s2: [],
+      time_series_s1: [],
+      time_series_rain: [],
+      estimated_planting_date: null,
+      estimated_harvest_date: null,
+      days_since_planting: null,
+      growth_stage: null,
+      planting_confidence: null,
+      evi: null,
+      savi: null,
+      ndwi: null,
+      agro_score: null,
+      hybrid_score: null,
+      cnn_prob_barley: null,
+      cnn_prob_non_barley: null,
+    });
+    // La nouvelle forme est enregistrée avant de supprimer l'ancienne : un échec ici
+    // laisse au pire un doublon, jamais une parcelle perdue.
+    await Promise.all(previousCorrections.map((c) => deleteParcelle(c.id)));
+    setEditingOutline(null);
+  }, [addParcelle, deleteParcelle, previousCorrections]);
+
   const handleSelectParcelle = useCallback((parcelle: Parcelle) => {
+    setEditingOutline(null);
     setDrawnParcel(null);
     setSelectedMonthIndex(null);
     setActiveTab("vegetation");
@@ -394,7 +491,7 @@ export default function SatelliteMap() {
           )}
 
           {/* Parcelles enregistrées dans la base de données — cliquables pour rouvrir leur fiche */}
-          <ParcelOverlays map={mapRef.current} parcelles={parcelles} onSelect={handleSelectParcelle} />
+          <ParcelOverlays map={mapRef.current} parcelles={savedParcelles} onSelect={handleSelectParcelle} />
 
           {/* Parcels discovered from the GPS search */}
           <AutomaticParcelOverlays map={mapRef.current} parcels={searchResult?.parcels ?? []} />
@@ -403,12 +500,40 @@ export default function SatelliteMap() {
           <SimpleFieldOverlays map={mapRef.current} result={simpleResult} />
 
           {/* Toutes les parcelles de l'écran, délimitées automatiquement (modèle JECAM sur image THR) */}
-          {VHR_PARCELS_ENABLED && <FtwParcelsOverlay map={mapRef.current} result={tracedParcels} />}
+          {VHR_PARCELS_ENABLED && (
+            <FtwParcelsOverlay
+              map={mapRef.current}
+              result={tracedParcels}
+              onSelect={handleEditTracedOutline}
+              hideWithin={editingOutline?.points}
+            />
+          )}
 
           {/* Parcelles JECAM/CIRAD colorées par culture prédite (modèle LTAE) */}
-          <ZoneCropsOverlay map={mapRef.current} result={zoneCrops} />
+          <ZoneCropsOverlay
+            map={mapRef.current}
+            result={zoneCrops}
+            onSelect={handleEditTracedOutline}
+            hideWithin={editingOutline?.points}
+          />
 
-          <PolygonDrawer map={mapRef.current} onPolygonComplete={handlePolygonComplete} />
+          {editingOutline ? (
+            <ParcelOutlineEditor
+              map={mapRef.current}
+              initialPoints={editingOutline.points}
+              style={editingOutline.style}
+              initialOwnerName={previousCorrections[0]?.owner_name}
+              initialNotes={previousCorrections[0]?.notes}
+              onSave={handleOutlineSave}
+              onCancel={() => setEditingOutline(null)}
+            />
+          ) : (
+            <PolygonDrawer
+              map={mapRef.current}
+              onPolygonComplete={handlePolygonComplete}
+              onDrawingChange={handleDrawingChange}
+            />
+          )}
 
           {/* Automatic GPS search */}
           <CoordinateInput
@@ -429,27 +554,6 @@ export default function SatelliteMap() {
             <VegetationLegend percentage={selectedNdvi} className="absolute top-16 right-4 sm:top-24" />
           )}
 
-          {/* Récapitulatif des cultures de la zone + limites du jeu de données */}
-          {!caseActive && (zoneCrops || zoneCropsLoading || zoneCropsError
-            || tracedParcels || tracingLoading || tracingError || tracingZoomTooLow) && (
-            <div className="absolute bottom-8 right-4 z-[820] flex max-h-[70vh] w-72 max-w-[85vw] flex-col gap-2 overflow-y-auto animate-fade-in">
-              {VHR_PARCELS_ENABLED && (
-                <FtwParcelsPanel
-                  result={tracedParcels}
-                  loading={tracingLoading}
-                  error={tracingError}
-                  progress={tracingProgress}
-                  hint={tracingZoomTooLow ? "Zoomez davantage pour tracer automatiquement les parcelles de l'écran." : null}
-                />
-              )}
-              <ZoneCropsPanel
-                result={zoneCrops}
-                loading={zoneCropsLoading}
-                error={zoneCropsError}
-              />
-            </div>
-          )}
-
           {/* Dashboard link */}
           <button
             onClick={() => navigate("/dashboard")}
@@ -458,15 +562,6 @@ export default function SatelliteMap() {
             <BarChart3 className="w-4 h-4 text-primary" />
             <span className="text-sm text-foreground font-medium">Tableau de bord</span>
           </button>
-
-          {searchResult && (
-            <div className="absolute bottom-8 left-4 right-32 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-lg z-[800] analysis-popup px-4 py-2.5 animate-fade-in">
-              <p className="text-xs text-muted-foreground">
-                <span className="inline-block w-2.5 h-2.5 rounded-sm border-2 border-yellow-400 mr-2 align-middle" />
-                {displayedBarleySegmentCount} contour(s) d’orge détecté(s) · {searchResult.candidates_found} zone(s) analysée(s)
-              </p>
-            </div>
-          )}
 
           {/* Zones VRA (onglet "Proche en zone") : raster NDVI classé, superposé sur la carte */}
           <ZoningOverlay map={mapRef.current} result={activeTab === "zoning" ? zoningResult : null} />

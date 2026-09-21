@@ -129,7 +129,7 @@ export default function CoordinateInput({
       return;
     }
     if (!Number.isFinite(config.threshold) || config.threshold < DEFAULT_BARLEY_DETECTION_CONFIG.threshold || config.threshold > 10000) {
-      setValidationError("Le seuil nécessaire doit être compris entre 2 200 et 10 000 °C.");
+      setValidationError("Le seuil nécessaire doit être compris entre 2 000 et 10 000 °C.");
       return;
     }
     if (!Number.isInteger(config.periodDays) || config.periodDays < 1 || config.periodDays > 730) {
@@ -171,7 +171,7 @@ export default function CoordinateInput({
       return;
     }
     if (!Number.isFinite(gddConfig.threshold) || gddConfig.threshold < DEFAULT_BARLEY_DETECTION_CONFIG.threshold || gddConfig.threshold > 10000) {
-      setValidationError("Le seuil nécessaire doit être compris entre 2 200 et 10 000 °C.");
+      setValidationError("Le seuil nécessaire doit être compris entre 2 000 et 10 000 °C.");
       return;
     }
     if (!Number.isInteger(gddConfig.periodDays) || gddConfig.periodDays < 1 || gddConfig.periodDays > 730) {

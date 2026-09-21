@@ -5,6 +5,12 @@
  * CIRAD (base JECAM, Antsirabe) avec la culture predite par un classifieur
  * temporel entraine sur des series Sentinel-2.
  *
+ * Restitution par parcelle : en lui passant les parcelles deja tracees a
+ * l'ecran (`parcels`), le service reporte la culture sur CHAQUE parcelle au
+ * lieu de colorier les ilots JECAM d'un seul tenant - certains font 30 ha et
+ * recouvraient des quartiers entiers. Les ilots qu'aucune parcelle tracee ne
+ * couvre reviennent avec `granularity: "bloc"` : a dessiner en contour seul.
+ *
  * A savoir avant d'afficher :
  *  - JECAM est un ECHANTILLONNAGE : environ 2 % des parcelles d'une zone y
  *    figurent. Beaucoup de champs visibles a l'ecran n'auront pas de contour.
@@ -14,6 +20,8 @@
  *
  * Le champ `warnings` de la reponse porte ces limites : affichez-le.
  */
+
+import type { ZoneParcelFeature, ZoneParcelsResult } from "@/lib/zone-parcels";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -32,6 +40,18 @@ export interface ZoneCropProperties {
   irrigated: number | null;
   /** Distance du centroide au point clique, en metres. */
   distance_m: number;
+  /**
+   * "parcelle" : contour a la taille d'une parcelle, a remplir.
+   * "bloc" : ilot JECAM de plus de 2 ha qu'aucune parcelle tracee ne decoupe —
+   * a dessiner en contour seul, sinon il repeint tout un quartier.
+   */
+  granularity: "parcelle" | "bloc";
+  /** D'ou vient le CONTOUR : "JECAM" (releve terrain) ou le modele de tracage. */
+  geometry_source: string;
+  /** Identifiant de l'ilot JECAM dont vient la CULTURE. */
+  jecam_id: string | null;
+  /** Part de la parcelle tracee couverte par cet ilot (null si contour JECAM). */
+  cover_ratio: number | null;
 }
 
 export interface ZoneCropFeature {
@@ -45,6 +65,10 @@ export interface ZoneCropFeature {
 
 export interface ZoneCropsSummary {
   n_parcels: number;
+  /** Parcelles dont la culture a ete reportee depuis un ilot JECAM. */
+  n_from_traced: number;
+  /** Ilots restes non decoupes, dessines en contour seul. */
+  n_blocs: number;
   area_ha_total: number;
   crops: Array<{ crop: string; n_parcels: number; area_ha: number }>;
   coverage: string;
@@ -64,11 +88,27 @@ export interface ZoneCropsResult {
   geojson: { type: "FeatureCollection"; features: ZoneCropFeature[] };
 }
 
+/** Parcelle tracee envoyee au service : contour et strict necessaire. */
+export interface TracedParcelForCrops {
+  type: "Feature";
+  geometry: ZoneParcelFeature["geometry"];
+  properties: {
+    parcel_id: string | undefined;
+    area_ha: number;
+    source: string;
+  };
+}
+
 export interface ZoneCropsOptions {
   /** Ne garder que les predictions au-dessus de ce seuil (0 a 1). */
   minConfidence?: number;
   /** Restreindre a certaines cultures. */
   crops?: string[];
+  /**
+   * Parcelles deja tracees a l'ecran : la culture est alors restituee par
+   * parcelle plutot que par ilot. Voir `tracedParcelsForCrops`.
+   */
+  parcels?: TracedParcelForCrops[];
   signal?: AbortSignal;
 }
 
@@ -151,6 +191,97 @@ export function cropLabel(crop: string | null | undefined): string {
 }
 
 /**
+ * Nombre maximal de parcelles tracees envoyees au service.
+ *
+ * Une parcelle pese quelques centaines d'octets en GeoJSON : au-dela, la
+ * requete devient plus longue a transmettre que le calcul lui-meme.
+ */
+const MAX_PARCELS_SENT = 3000;
+
+const M_PER_DEG_LAT = 111_132;
+const M_PER_DEG_LNG_EQUATOR = 111_320;
+
+/** Centre approche d'une geometrie, a partir de son enveloppe. */
+function featureCenter(feature: ZoneParcelFeature): { lat: number; lng: number } | null {
+  const rings: number[][][] =
+    feature.geometry.type === "Polygon"
+      ? (feature.geometry.coordinates as number[][][])
+      : (feature.geometry.coordinates as number[][][][]).map((polygon) => polygon[0]);
+  const points = rings.flat();
+  if (points.length === 0) return null;
+  let north = -Infinity, south = Infinity, east = -Infinity, west = Infinity;
+  for (const [lng, lat] of points) {
+    if (lat > north) north = lat;
+    if (lat < south) south = lat;
+    if (lng > east) east = lng;
+    if (lng < west) west = lng;
+  }
+  return { lat: (north + south) / 2, lng: (east + west) / 2 };
+}
+
+/**
+ * Coordonnees arrondies au millionieme de degre (environ 11 cm).
+ *
+ * La requete est renvoyee a chaque carre tracé : sur quelques milliers de
+ * parcelles, garder les 15 decimales des flottants double la taille du corps
+ * sans rien apporter — les contours viennent d'une image a 1,2 m.
+ */
+function roundRing(ring: number[][]): number[][] {
+  return ring.map(([lng, lat]) => [Math.round(lng * 1e6) / 1e6, Math.round(lat * 1e6) / 1e6]);
+}
+
+function compactGeometry(geometry: ZoneParcelFeature["geometry"]): ZoneParcelFeature["geometry"] {
+  if (geometry.type === "Polygon") {
+    return { type: "Polygon", coordinates: (geometry.coordinates as number[][][]).map(roundRing) };
+  }
+  return {
+    type: "MultiPolygon",
+    coordinates: (geometry.coordinates as number[][][][]).map((polygon) => polygon.map(roundRing)),
+  };
+}
+
+/**
+ * Parcelles tracees du cercle d'analyse, a passer a `fetchZoneCrops`.
+ *
+ * Les plus proches d'abord : si la zone est tres peuplee, ce sont celles-la que
+ * l'utilisateur regarde. Une marge est laissee autour du cercle pour qu'un ilot
+ * a cheval sur le bord soit quand meme decoupe. Seules les proprietes utiles au
+ * report de culture sont envoyees.
+ */
+export function tracedParcelsForCrops(
+  traced: ZoneParcelsResult | null,
+  lat: number,
+  lng: number,
+  radiusM: number,
+): TracedParcelForCrops[] {
+  if (!traced) return [];
+  const longitudeScale = Math.max(Math.abs(Math.cos((lat * Math.PI) / 180)), 0.1);
+  const maxDistanceM = radiusM + 300;
+
+  return traced.geojson.features
+    .flatMap((feature) => {
+      const center = featureCenter(feature);
+      if (!center) return [];
+      const eastM = (center.lng - lng) * M_PER_DEG_LNG_EQUATOR * longitudeScale;
+      const northM = (center.lat - lat) * M_PER_DEG_LAT;
+      const distanceM = Math.hypot(eastM, northM);
+      if (distanceM > maxDistanceM) return [];
+      return [{ distanceM, feature }];
+    })
+    .sort((a, b) => a.distanceM - b.distanceM)
+    .slice(0, MAX_PARCELS_SENT)
+    .map(({ feature }) => ({
+      type: "Feature" as const,
+      geometry: compactGeometry(feature.geometry),
+      properties: {
+        parcel_id: feature.properties.parcel_id ?? feature.properties.ftw_id,
+        area_ha: feature.properties.area_ha,
+        source: feature.properties.source,
+      },
+    }));
+}
+
+/**
  * Interroge le backend pour les parcelles d'une zone circulaire.
  *
  * @param lat     latitude du centre
@@ -173,6 +304,7 @@ export async function fetchZoneCrops(
       radius_m: radiusM,
       min_confidence: options.minConfidence ?? 0,
       crops: options.crops ?? null,
+      parcels: options.parcels ?? null,
     }),
   });
 

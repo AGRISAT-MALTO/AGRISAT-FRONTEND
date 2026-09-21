@@ -95,6 +95,30 @@ export function tilesForBounds(
     .slice(0, maxTiles);
 }
 
+/**
+ * Tous les carrés qui recoupent un cercle d'analyse, sans plafond et quel que
+ * soit le zoom : la zone doit être tracée entièrement, pas seulement sa partie
+ * visible. Du plus proche au plus éloigné du centre.
+ */
+export function tilesForCircle(center: LatLng, radiusM: number): TraceTile[] {
+  const latDelta = radiusM / M_PER_DEG_LAT;
+  const lngDelta = radiusM / (M_PER_DEG_LNG_EQUATOR * longitudeScale(center.lat));
+  const bounds = {
+    south: center.lat - latDelta,
+    north: center.lat + latDelta,
+    west: center.lng - lngDelta,
+    east: center.lng + lngDelta,
+  };
+  return tilesForBounds(bounds, center, Infinity).filter((tile) => {
+    // Point du carré le plus proche du centre du cercle.
+    const nearest = {
+      lat: Math.min(Math.max(center.lat, tile.south), tile.north),
+      lng: Math.min(Math.max(center.lng, tile.west), tile.east),
+    };
+    return distanceM(center, nearest) <= radiusM;
+  });
+}
+
 export function outerRing(geometry: ZoneParcelFeature["geometry"]): number[][] | null {
   if (geometry.type === "Polygon") return (geometry.coordinates as number[][][])[0] ?? null;
   if (geometry.type === "MultiPolygon") return (geometry.coordinates as number[][][][])[0]?.[0] ?? null;

@@ -17,14 +17,11 @@ export const SOURCE_LABELS: Record<string, string> = {
 
 export default function AutomaticParcelOverlays({ map, parcels }: AutomaticParcelOverlaysProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
-  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
-
   useEffect(() => {
     if (!map) return;
 
     polygonsRef.current.forEach((polygon) => polygon.setMap(null));
     polygonsRef.current = [];
-    if (!infoWindowRef.current) infoWindowRef.current = new google.maps.InfoWindow();
 
     // Contour réel de chaque parcelle candidate (parcelle tracée JECAM-VHR, Overpass, base,
     // modèle IA, watershed...), indépendamment du résultat de la classification orge — sans ça, le
@@ -43,22 +40,12 @@ export default function AutomaticParcelOverlays({ map, parcels }: AutomaticParce
         zIndex: 10,
         map,
       });
-      boundaryPolygon.addListener("mouseover", (event: google.maps.PolyMouseEvent) => {
+      // Pas d'infobulle au survol : seule la surbrillance signale la parcelle.
+      boundaryPolygon.addListener("mouseover", () => {
         boundaryPolygon.setOptions({ fillOpacity: 0.18, strokeWeight: 3 });
-        const content = document.createElement("div");
-        content.style.cssText = "font-family:'Space Grotesk',sans-serif;color:#333;min-width:160px;padding:4px";
-        const title = document.createElement("strong");
-        title.textContent = SOURCE_LABELS[parcel.tags.source ?? ""] ?? "Contour détecté";
-        content.append(title);
-        if (event.latLng) {
-          infoWindowRef.current?.setContent(content);
-          infoWindowRef.current?.setPosition(event.latLng);
-          infoWindowRef.current?.open(map);
-        }
       });
       boundaryPolygon.addListener("mouseout", () => {
         boundaryPolygon.setOptions({ fillOpacity: 0.05, strokeWeight: 2 });
-        infoWindowRef.current?.close();
       });
       polygonsRef.current.push(boundaryPolygon);
     });
@@ -80,26 +67,11 @@ export default function AutomaticParcelOverlays({ map, parcels }: AutomaticParce
         zIndex: 20,
         map,
       });
-      polygon.addListener("mouseover", (event: google.maps.PolyMouseEvent) => {
+      polygon.addListener("mouseover", () => {
         polygon.setOptions({ fillOpacity: 0.42, strokeWeight: 5 });
-        const content = document.createElement("div");
-        content.style.cssText = "font-family:'Space Grotesk',sans-serif;color:#333;min-width:160px;padding:4px";
-        const title = document.createElement("strong");
-        title.textContent = `Orge détectée (${segment.confidence}%)`;
-        const details = document.createElement("div");
-        details.style.cssText = "font-size:11px;color:#666;margin-top:4px;line-height:1.5";
-        const ndvi = segment.ndvi != null ? `NDVI : ${segment.ndvi.toFixed(2)}` : "NDVI : —";
-        details.textContent = `${segment.area_ha} ha · ${ndvi}`;
-        content.append(title, details);
-        if (event.latLng) {
-          infoWindowRef.current?.setContent(content);
-          infoWindowRef.current?.setPosition(event.latLng);
-          infoWindowRef.current?.open(map);
-        }
       });
       polygon.addListener("mouseout", () => {
         polygon.setOptions({ fillOpacity: 0.2, strokeWeight: 4 });
-        infoWindowRef.current?.close();
       });
       polygonsRef.current.push(polygon);
     });
@@ -107,7 +79,6 @@ export default function AutomaticParcelOverlays({ map, parcels }: AutomaticParce
     return () => {
       polygonsRef.current.forEach((polygon) => polygon.setMap(null));
       polygonsRef.current = [];
-      infoWindowRef.current?.close();
     };
   }, [map, parcels]);
 

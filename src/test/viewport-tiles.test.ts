@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_TILES_PER_VIEW,
   TILE_RADIUS_M,
   TILE_SIZE_M,
   featuresInTile,
   mergeTileResults,
   tilesForBounds,
+  tilesForCircle,
 } from "@/lib/viewport-tiles";
 import type { ZoneParcelFeature, ZoneParcelsResult } from "@/lib/zone-parcels";
 
@@ -57,6 +59,29 @@ describe("découpage de l'écran en zones de traçage", () => {
     const first = tiles[0];
     expect(CENTER.lat >= first.south && CENTER.lat < first.north).toBe(true);
     expect(CENTER.lng >= first.west && CENTER.lng < first.east).toBe(true);
+  });
+
+  it("couvre toute la zone d'analyse, sans plafond, en commençant par son centre", () => {
+    const radiusM = 5_000;
+    const tiles = tilesForCircle(CENTER, radiusM);
+    expect(tiles.length).toBeGreaterThan(MAX_TILES_PER_VIEW);
+    const first = tiles[0];
+    expect(CENTER.lat >= first.south && CENTER.lat < first.north).toBe(true);
+    expect(CENTER.lng >= first.west && CENTER.lng < first.east).toBe(true);
+    // Points au bord du cercle, aux quatre points cardinaux.
+    const latDelta = (radiusM - 1) / 110_574;
+    const lngDelta = (radiusM - 1) / (111_320 * Math.cos((CENTER.lat * Math.PI) / 180));
+    const edges = [
+      [CENTER.lat + latDelta, CENTER.lng], [CENTER.lat - latDelta, CENTER.lng],
+      [CENTER.lat, CENTER.lng + lngDelta], [CENTER.lat, CENTER.lng - lngDelta],
+    ];
+    for (const [lat, lng] of edges) {
+      expect(tiles.some((t) => lat >= t.south && lat < t.north && lng >= t.west && lng < t.east)).toBe(true);
+    }
+    // Aucun carré hors du cercle : moins que le carré englobant.
+    expect(tiles.length).toBeLessThan(tilesForBounds(
+      { south: CENTER.lat - latDelta, north: CENTER.lat + latDelta, west: CENTER.lng - lngDelta, east: CENTER.lng + lngDelta },
+      CENTER, Infinity).length);
   });
 
   it("trace chaque zone avec un cercle qui la contient entièrement", () => {

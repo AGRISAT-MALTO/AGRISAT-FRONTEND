@@ -149,6 +149,14 @@ function scoreColor(score: number): string {
   return "text-red-400";
 }
 
+/**
+ * Les analyses faites avec le classifieur Sentinel-2 (backend, barley_s2_classifier) mettent la
+ * probabilité d'orge dans hybrid_score ; les plus anciennes y ont 0,6 × CNN + 0,4 × Agro.
+ */
+function usesS2Classifier(result: AnalysisResultData): boolean {
+  return result.data_source?.includes("Classifieur orge Sentinel-2") ?? false;
+}
+
 function InfoRow({ label, value, valueClassName }: { label: string; value: ReactNode; valueClassName?: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
@@ -399,8 +407,8 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                 <div className="absolute inset-0 rounded-full border-2 border-muted" />
                 <div className="absolute inset-0 rounded-full border-2 border-primary border-t-transparent animate-spin" />
               </div>
-              <span className="text-sm text-muted-foreground">Analyse CNN + Satellite + Agro...</span>
-              <span className="text-xs text-muted-foreground">S1 + S2 + Pluie + Score hybride</span>
+              <span className="text-sm text-muted-foreground">Analyse satellite de la parcelle...</span>
+              <span className="text-xs text-muted-foreground">Sentinel-2 + Sentinel-1 + Pluie</span>
             </motion.div>
           )}
 
@@ -419,7 +427,9 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                   <motion.div className={`h-full rounded-full ${barColor(result.percentage)}`} initial={{ width: 0 }} animate={{ width: `${result.percentage}%` }} transition={{ duration: 1, ease: "easeOut" }} />
                 </div>
               )}
-              <span className="text-xs text-muted-foreground">NDVI · Score hybride : {result.hybrid_score ?? "—"}%</span>
+              <span className="text-xs text-muted-foreground">
+                NDVI · {usesS2Classifier(result) ? "Probabilité d'orge" : "Score hybride"} : {result.hybrid_score ?? "—"}%
+              </span>
             </motion.div>
           )}
 
@@ -434,7 +444,9 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                 {result.hybrid_score != null && (
                   <div>
                     <span className={cn("text-xl font-bold mono", scoreColor(result.hybrid_score))}>{result.hybrid_score}%</span>
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide mt-0.5">Hybride</p>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide mt-0.5">
+                      {usesS2Classifier(result) ? "Orge (S2)" : "Hybride"}
+                    </p>
                   </div>
                 )}
                 {result.percentage != null && (
@@ -489,7 +501,9 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
               {result.agro_breakdown && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
                   className="space-y-1.5 pt-2.5 border-t border-border/60">
-                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Décomposition du score</p>
+                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                    {usesS2Classifier(result) ? "Scores indicatifs (hors verdict)" : "Décomposition du score"}
+                  </p>
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
                     <InfoRow label="CNN" value={`${result.cnn_prob_barley?.toFixed(1) ?? "—"}%`} />
                     <InfoRow label="Agro" value={`${result.agro_score ?? "—"}%`} />
@@ -498,7 +512,11 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                     <InfoRow label="Radar" value={`${result.agro_breakdown.radar_score}%`} />
                     <InfoRow label="Tendance" value={`${result.agro_breakdown.ndvi_trend_score}%`} />
                   </div>
-                  <p className="text-[10px] text-muted-foreground italic">= 0.6×CNN + 0.4×Agro</p>
+                  <p className="text-[10px] text-muted-foreground italic">
+                    {usesS2Classifier(result)
+                      ? "Verdict donné par le NDVI Sentinel-2 calibré sur le terrain ; CNN et Agro ne départageaient pas l'orge."
+                      : "= 0.6×CNN + 0.4×Agro"}
+                  </p>
                 </motion.div>
               )}
 

@@ -138,6 +138,10 @@ export function isAutomaticBarleyParcel(parcel: AutomaticParcel): boolean {
   return parcel.analysis?.is_barley === true || (culture.includes("orge") && !culture.includes("non"));
 }
 
+/**
+ * Contours d'orge renvoyés par le backend. C'est lui qui décide (classifieur Sentinel-2, ou
+ * repli CNN au-dessus de 70 %) : on ne filtre ici que les géométries inexploitables.
+ */
 export function getDetectedBarleySegments(parcel: AutomaticParcel): DetectedBarleySegment[] {
   const segments = parcel.analysis?.detected_segments;
   if (!Array.isArray(segments)) return [];
@@ -147,7 +151,6 @@ export function getDetectedBarleySegments(parcel: AutomaticParcel): DetectedBarl
     && segment.coordinates.length >= 3
     && segment.coordinates.every((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng))
     && Number.isFinite(segment.confidence)
-    && segment.confidence >= 70
     && Number.isFinite(segment.area_ha)
   ));
 }

@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 import {
   fiabilite,
-  libelleFiabilite,
   type ZoneParcelFeature,
   type ZoneParcelsResult,
 } from "@/lib/zone-parcels";
+import { pointInRing, ringCentroid, type LatLng, type OutlineStyle } from "@/lib/outline-corrections";
 
 /**
  * Contours des parcelles délimitées automatiquement (modèle JECAM sur image
@@ -20,7 +20,10 @@ import {
 interface FtwParcelsOverlayProps {
   map: google.maps.Map | null;
   result: ZoneParcelsResult | null;
-  onSelect?: (feature: ZoneParcelFeature) => void;
+  /** Clic sur un contour : l'anneau cliqué (sans le point de fermeture GeoJSON) et son style. */
+  onSelect?: (feature: ZoneParcelFeature, points: LatLng[], style: OutlineStyle) => void;
+  /** Contour en cours d'édition : les parcelles dont le centre y tombe ne sont pas dessinées. */
+  hideWithin?: LatLng[] | null;
 }
 
 const STYLE = {
@@ -38,60 +41,49 @@ function outerRings(geometry: ZoneParcelFeature["geometry"]): number[][][] {
   return [];
 }
 
-export default function FtwParcelsOverlay({ map, result, onSelect }: FtwParcelsOverlayProps) {
+export default function FtwParcelsOverlay({ map, result, onSelect, hideWithin }: FtwParcelsOverlayProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
-  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   useEffect(() => {
     if (!map) return;
 
     polygonsRef.current.forEach((polygon) => polygon.setMap(null));
     polygonsRef.current = [];
-    if (!infoWindowRef.current) infoWindowRef.current = new google.maps.InfoWindow();
 
     (result?.geojson.features ?? []).forEach((feature) => {
-      const { area_ha, confidence, parcel_id, ftw_id, trace_mode } = feature.properties;
-      const niveau = fiabilite(area_ha);
+      const niveau = fiabilite(feature.properties.area_ha);
       const style = STYLE[niveau];
 
       outerRings(feature.geometry).forEach((ring) => {
         if (!ring || ring.length < 3) return;
-        const polygon = new google.maps.Polygon({
-          paths: ring.map(([lng, lat]) => ({ lat, lng })),
+        const points = ring.map(([lng, lat]) => ({ lat, lng }));
+        const last = points[points.length - 1];
+        if (points.length > 3 && last.lat === points[0].lat && last.lng === points[0].lng) points.pop();
+        if (hideWithin && pointInRing(ringCentroid(points), hideWithin)) return;
+        const outlineStyle: OutlineStyle = {
           strokeColor: style.stroke,
           strokeWeight: style.weight,
           strokeOpacity: style.opacity,
           fillColor: style.stroke,
           fillOpacity: 0.04,
+        };
+        const polygon = new google.maps.Polygon({
+          paths: points,
+          ...outlineStyle,
           zIndex: 10, // sous les parcelles JECAM (15 à 30)
           map,
         });
 
-        polygon.addListener("mouseover", (event: google.maps.PolyMouseEvent) => {
+        // Pas d'infobulle au survol : seule la surbrillance signale la parcelle.
+        polygon.addListener("mouseover", () => {
           polygon.setOptions({ fillOpacity: 0.22, strokeWeight: style.weight + 1 });
-          const content = document.createElement("div");
-          content.style.cssText =
-            "font-family:'Space Grotesk',sans-serif;color:#333;min-width:200px;padding:4px";
-          const title = document.createElement("strong");
-          title.textContent = `Parcelle détectée — ${area_ha.toFixed(2)} ha`;
-          const details = document.createElement("div");
-          details.style.cssText = "font-size:11px;color:#666;margin-top:4px;line-height:1.6";
-          details.innerHTML = [
-            libelleFiabilite(niveau, trace_mode),
-            ...(trace_mode === "mix" ? ["Tracé sur 5 dates d'image"] : []),
-            `Score du modèle : ${Math.round(confidence)} / 100`,
-            `Réf. ${parcel_id ?? ftw_id ?? "-"}`,
-          ].join("<br/>");
-          content.append(title, details);
-          infoWindowRef.current?.setContent(content);
-          if (event.latLng) infoWindowRef.current?.setPosition(event.latLng);
-          infoWindowRef.current?.open(map);
         });
         polygon.addListener("mouseout", () => {
           polygon.setOptions({ fillOpacity: 0.04, strokeWeight: style.weight });
-          infoWindowRef.current?.close();
         });
-        if (onSelect) polygon.addListener("click", () => onSelect(feature));
+        polygon.addListener("click", () => onSelectRef.current?.(feature, points, outlineStyle));
 
         polygonsRef.current.push(polygon);
       });
@@ -100,9 +92,8 @@ export default function FtwParcelsOverlay({ map, result, onSelect }: FtwParcelsO
     return () => {
       polygonsRef.current.forEach((polygon) => polygon.setMap(null));
       polygonsRef.current = [];
-      infoWindowRef.current?.close();
     };
-  }, [map, result, onSelect]);
+  }, [map, result, hideWithin]);
 
   return null;
 }

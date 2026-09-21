@@ -6,24 +6,32 @@ import {
   featuresInTile,
   mergeTileResults,
   tilesForBounds,
+  tilesForCircle,
   type TraceTile,
 } from "@/lib/viewport-tiles";
 
 /**
- * Trace automatiquement les parcelles visibles à l'écran, sans analyse.
+ * Trace automatiquement les parcelles visibles à l'écran, sans analyse, et
+ * toutes celles de la zone d'analyse.
  *
  * À chaque arrêt de la carte (événement « idle »), l'écran est découpé en
  * zones fixes (voir viewport-tiles.ts) et les zones pas encore tracées sont
  * envoyées une par une au service de traçage, le centre de l'écran d'abord.
  * Une seule requête à la fois : le modèle tourne sur CPU et plusieurs
  * traçages simultanés ne vont pas plus vite. Les zones tracées restent
- * affichées quand on se déplace ; celles qui sortent de l'écran avant leur
+ * affichées quand on se déplace ; celles de l'écran qui en sortent avant leur
  * tour sont abandonnées.
+ *
+ * Les carrés de la zone d'analyse (traceZone) passent en premier et ne sont
+ * jamais abandonnés : ni le déplacement de la carte, ni un zoom trop faible
+ * ne les retirent de la file.
  */
 
 export interface TracingProgress {
   done: number;
   total: number;
+  /** « zone » : carrés de la zone d'analyse ; « screen » : carrés visibles à l'écran. */
+  scope: "zone" | "screen";
 }
 
 export function useViewportParcelTracing() {
@@ -31,18 +39,40 @@ export function useViewportParcelTracing() {
   const failedTilesRef = useRef(new Set<string>());
   const queueRef = useRef<TraceTile[]>([]);
   const inflightKeyRef = useRef<string | null>(null);
-  const visibleKeysRef = useRef<string[]>([]);
+  const visibleTilesRef = useRef<TraceTile[]>([]);
+  const zoneTilesRef = useRef<TraceTile[]>([]);
   const [result, setResult] = useState<ZoneParcelsResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<TracingProgress | null>(null);
   const [zoomTooLow, setZoomTooLow] = useState(false);
 
+  const isSettled = useCallback(
+    (key: string) => tileResultsRef.current.has(key) || failedTilesRef.current.has(key),
+    [],
+  );
+
   const refreshProgress = useCallback(() => {
-    const keys = visibleKeysRef.current;
-    const done = keys.filter((key) => tileResultsRef.current.has(key) || failedTilesRef.current.has(key)).length;
-    setProgress(keys.length > 0 ? { done, total: keys.length } : null);
-  }, []);
+    const zoneKeys = zoneTilesRef.current.map((tile) => tile.key);
+    const zoneDone = zoneKeys.filter(isSettled).length;
+    if (zoneKeys.length > 0 && zoneDone < zoneKeys.length) {
+      setProgress({ done: zoneDone, total: zoneKeys.length, scope: "zone" });
+      return;
+    }
+    const keys = visibleTilesRef.current.map((tile) => tile.key);
+    const done = keys.filter(isSettled).length;
+    setProgress(keys.length > 0 ? { done, total: keys.length, scope: "screen" } : null);
+  }, [isSettled]);
+
+  /** File : carrés restants de la zone d'analyse, puis ceux de l'écran. */
+  const rebuildQueue = useCallback(() => {
+    const queued = new Set<string>();
+    queueRef.current = [...zoneTilesRef.current, ...visibleTilesRef.current].filter((tile) => {
+      if (queued.has(tile.key) || isSettled(tile.key) || tile.key === inflightKeyRef.current) return false;
+      queued.add(tile.key);
+      return true;
+    });
+  }, [isSettled]);
 
   const traceNextTile = useCallback(() => {
     if (inflightKeyRef.current) return;
@@ -84,27 +114,28 @@ export function useViewportParcelTracing() {
 
     if (zoom < MIN_TRACING_ZOOM) {
       setZoomTooLow(true);
-      visibleKeysRef.current = [];
-      queueRef.current = [];
-      refreshProgress();
-      return;
+      visibleTilesRef.current = [];
+    } else {
+      setZoomTooLow(false);
+      const northEast = bounds.getNorthEast();
+      const southWest = bounds.getSouthWest();
+      visibleTilesRef.current = tilesForBounds(
+        { south: southWest.lat(), north: northEast.lat(), west: southWest.lng(), east: northEast.lng() },
+        { lat: center.lat(), lng: center.lng() },
+      );
     }
-    setZoomTooLow(false);
-
-    const northEast = bounds.getNorthEast();
-    const southWest = bounds.getSouthWest();
-    const tiles = tilesForBounds(
-      { south: southWest.lat(), north: northEast.lat(), west: southWest.lng(), east: northEast.lng() },
-      { lat: center.lat(), lng: center.lng() },
-    );
-    visibleKeysRef.current = tiles.map((tile) => tile.key);
-    queueRef.current = tiles.filter((tile) =>
-      !tileResultsRef.current.has(tile.key)
-      && !failedTilesRef.current.has(tile.key)
-      && tile.key !== inflightKeyRef.current);
+    rebuildQueue();
     refreshProgress();
     traceNextTile();
-  }, [refreshProgress, traceNextTile]);
+  }, [rebuildQueue, refreshProgress, traceNextTile]);
 
-  return { result, loading, error, progress, zoomTooLow, onViewportIdle };
+  /** Trace toutes les parcelles du cercle d'analyse qui ne le sont pas encore. */
+  const traceZone = useCallback((lat: number, lng: number, radiusM: number) => {
+    zoneTilesRef.current = tilesForCircle({ lat, lng }, radiusM);
+    rebuildQueue();
+    refreshProgress();
+    traceNextTile();
+  }, [rebuildQueue, refreshProgress, traceNextTile]);
+
+  return { result, loading, error, progress, zoomTooLow, onViewportIdle, traceZone };
 }

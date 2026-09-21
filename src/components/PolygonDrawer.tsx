@@ -11,10 +11,16 @@ interface PolygonDrawerProps {
     ownerName: string,
     notes: string
   ) => void;
+  /** Prévenu quand le dessin commence ou s'arrête. */
+  onDrawingChange?: (drawing: boolean) => void;
 }
 
-export default function PolygonDrawer({ map, onPolygonComplete }: PolygonDrawerProps) {
+export default function PolygonDrawer({ map, onPolygonComplete, onDrawingChange }: PolygonDrawerProps) {
   const [drawing, setDrawing] = useState(false);
+
+  useEffect(() => {
+    onDrawingChange?.(drawing);
+  }, [drawing, onDrawingChange]);
   const [showForm, setShowForm] = useState(false);
   const [ownerName, setOwnerName] = useState("");
   const [notes, setNotes] = useState("");

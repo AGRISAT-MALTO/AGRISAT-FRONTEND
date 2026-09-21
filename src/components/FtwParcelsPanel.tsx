@@ -11,14 +11,15 @@ interface FtwParcelsPanelProps {
   result: ZoneParcelsResult | null;
   loading?: boolean;
   error?: string | null;
-  /** Avancement du traçage des zones visibles à l'écran. */
+  /** Avancement du traçage de la zone d'analyse, ou à défaut des zones visibles à l'écran. */
   progress?: TracingProgress | null;
   /** Raison pour laquelle le traçage automatique est en pause (zoom trop faible). */
   hint?: string | null;
 }
 
 function progressLabel(progress?: TracingProgress | null): string {
-  const zones = progress ? ` — ${progress.done}/${progress.total} zones de l'écran` : "";
+  const scope = progress?.scope === "zone" ? "carrés de la zone d'analyse" : "zones de l'écran";
+  const zones = progress ? ` — ${progress.done}/${progress.total} ${scope}` : "";
   return `Traçage automatique des parcelles…${zones} (30 à 60 s par zone)`;
 }
 
