@@ -34,18 +34,20 @@ export default function SimpleFieldOverlays({ map, result }: SimpleFieldOverlays
       });
       polygon.addListener("mouseover", (event: google.maps.PolyMouseEvent) => {
         polygon.setOptions({ fillOpacity: 0.42, strokeWeight: 5 });
-        const { confidence, areaHa, meanNDVI, meanNDRE, imageDate, imageAgeDays, cloudPercentage, barleyPresence } = feature.properties;
+        const { culture, confidence, confirmation, confirmationMethod, alternatives, areaHa, meanNDVI, meanNDRE, meanNDWI, imageDate, imageAgeDays, cloudPercentage, barleyPresence } = feature.properties;
         const content = document.createElement("div");
         content.style.cssText = "font-family:'Space Grotesk',sans-serif;color:#333;min-width:180px;padding:4px";
         const title = document.createElement("strong");
-        title.textContent = `Orge (analyse simple) — ${Math.round(confidence * 100)}%`;
+        title.textContent = `${culture} (analyse multi-cultures) — ${Math.round(confidence * 100)}%`;
         const details = document.createElement("div");
         details.style.cssText = "font-size:11px;color:#666;margin-top:4px;line-height:1.6";
         details.innerHTML = [
-          `${areaHa} ha`,
-          `NDVI : ${meanNDVI != null ? meanNDVI.toFixed(2) : "—"} · NDRE : ${meanNDRE != null ? meanNDRE.toFixed(2) : "—"}`,
+          `${areaHa} ha · ${confirmation}`,
+          `Méthode : ${confirmationMethod}`,
+          `Alternatives : ${alternatives.join(" · ")}`,
+          `NDVI : ${meanNDVI != null ? meanNDVI.toFixed(2) : "—"} · NDRE : ${meanNDRE != null ? meanNDRE.toFixed(2) : "—"} · NDWI : ${meanNDWI != null ? meanNDWI.toFixed(2) : "—"}`,
           `Image : ${imageDate ?? "—"} (${imageAgeDays ?? "?"} j) · nuages ${cloudPercentage ?? "?"}%`,
-          `Présence : ${barleyPresence === "confirmed" ? "confirmée par degrés-jours" : "probable (CNN seul)"}`,
+          ...(barleyPresence !== "not_applicable" ? [`Présence d'orge : ${barleyPresence === "confirmed" ? "confirmée par degrés-jours" : "probable"}`] : []),
         ].join("<br/>");
         content.append(title, details);
         if (event.latLng) {

@@ -4,15 +4,20 @@ export interface SimpleFieldFeature {
   type: "Feature";
   geometry: { type: "Polygon"; coordinates: number[][][] };
   properties: {
-    class: "ORGE";
+    class: "ORGE" | "RIZ" | "MAIS" | "CEREALE" | "PDT" | "MARAICHAGE" | "AUTRE";
+    culture: string;
     confidence: number;
+    confirmation: "confirmée" | "à vérifier";
+    confirmationMethod: string;
+    alternatives: string[];
     areaHa: number;
     meanNDVI: number | null;
     meanNDRE: number | null;
+    meanNDWI: number | null;
     imageDate: string | null;
     imageAgeDays: number | null;
     cloudPercentage: number | null;
-    barleyPresence: "confirmed" | "probable";
+    barleyPresence: "confirmed" | "probable" | "not_applicable";
   };
 }
 

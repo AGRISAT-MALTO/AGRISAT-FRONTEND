@@ -41,6 +41,10 @@ export default function CoordinateInput({
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState("");
 
+  const detectedCultures = simpleResult
+    ? Array.from(new Set(simpleResult.features.map((feature) => feature.properties.culture))).join(" · ")
+    : "";
+
   useEffect(() => {
     if (!pickedLocation) return;
     setLat(pickedLocation.lat.toFixed(6));
@@ -110,6 +114,7 @@ export default function CoordinateInput({
     const lngNum = Number(lng);
     const radiusInput = Number(radiusValue);
     const radiusNum = radiusUnit === "m" ? radiusInput / 1000 : radiusInput;
+    const confidencePercentNum = Number(simpleConfidencePercent);
     const config = {
       baseTemperature: Number(baseTemperature),
       threshold: Number(threshold),
@@ -122,6 +127,10 @@ export default function CoordinateInput({
     }
     if (!Number.isFinite(radiusInput) || radiusInput <= 0 || !Number.isFinite(radiusNum) || radiusNum < 0.05 || radiusNum > 20) {
       setValidationError("Le rayon doit être compris entre 50 m et 20 km.");
+      return;
+    }
+    if (!Number.isFinite(confidencePercentNum) || confidencePercentNum < 50 || confidencePercentNum > 95) {
+      setValidationError("Le seuil de confiance doit être compris entre 50 % et 95 %.");
       return;
     }
     if (!Number.isFinite(config.baseTemperature) || config.baseTemperature < -20 || config.baseTemperature > 30) {
@@ -139,7 +148,7 @@ export default function CoordinateInput({
 
     setValidationError("");
     onNavigate(latNum, lngNum, radiusNum);
-    await onSearch(latNum, lngNum, radiusNum, config);
+    await onSearchSimple(latNum, lngNum, radiusNum * 1000, confidencePercentNum / 100, config);
   };
 
   const handleSimpleSearch = async () => {
@@ -273,11 +282,12 @@ export default function CoordinateInput({
         </div>
         {validationError && <p className="text-xs text-destructive">{validationError}</p>}
         {searchError && <p className="text-xs text-destructive">{searchError}</p>}
-        <Button type="submit" size="sm" className="w-full gap-2" disabled={isSearching}>
-          {isSearching
+        {simpleSearchError && <p className="text-xs text-destructive">{simpleSearchError}</p>}
+        <Button type="submit" size="sm" className="w-full gap-2" disabled={isSearchingSimple}>
+          {isSearchingSimple
             ? <span key="icon" className="w-3.5 h-3.5 rounded-full border-2 border-primary-foreground/40 border-t-primary-foreground animate-spin" />
             : <Navigation key="icon" className="w-4 h-4" />}
-          <span key="label">{isSearching ? "Analyse HF + satellite..." : "Lancer l’analyse automatique"}</span>
+          <span key="label">{isSearchingSimple ? "Analyse multi-cultures..." : "Analyser les cultures"}</span>
         </Button>
       </form>
       {simpleSearchError && <p className="mt-2 text-xs text-destructive">{simpleSearchError}</p>}
@@ -294,18 +304,16 @@ export default function CoordinateInput({
             </div>
             <div className="rounded-md bg-cyan-300/30 dark:bg-cyan-400/15 p-2">
               <p className="text-lg font-semibold text-cyan-700 dark:text-cyan-300">{simpleResult.features.length}</p>
-              <p className="text-[10px] text-cyan-800 dark:text-cyan-400">orge détectée</p>
+              <p className="text-[10px] text-cyan-800 dark:text-cyan-400">cultures détectées</p>
             </div>
           </div>
           <p className="text-[11px] text-muted-foreground">
             Image Sentinel-2 : {simpleResult.imageDate ?? "—"} ({simpleResult.imageAgeDays ?? "?"} j) · nuages {simpleResult.cloudPercentage ?? "?"}% · seuil de confiance {Math.round(simpleResult.confidenceThreshold * 100)}%
           </p>
           <p className="text-[11px] text-muted-foreground">
-            Degrés-jours : {simpleResult.gddCumulative ?? "?"}/{simpleResult.gddThreshold} °C
-            {simpleResult.gddCumulative != null && (simpleResult.gddCumulative >= simpleResult.gddThreshold
-              ? " · présence confirmée"
-              : " · présence probable (CNN seul)")}
+            Lecture multi-cultures indicative · validation terrain recommandée
           </p>
+          {detectedCultures && <p className="text-[11px] font-medium text-cyan-800 dark:text-cyan-300">{detectedCultures}</p>}
           {simpleResult.warnings.length > 0 && (
             <div className="rounded-md bg-amber-100/80 dark:bg-amber-500/15 px-2 py-1.5 space-y-0.5">
               {simpleResult.warnings.map((warning, index) => (
@@ -313,7 +321,7 @@ export default function CoordinateInput({
               ))}
             </div>
           )}
-          <p className="text-[11px] text-cyan-800 dark:text-cyan-400">Cyan : segmentation SNIC Sentinel-2 (NDVI/NDRE) + modèle HF. Le fond de carte affiche l'image Sentinel-2 exacte utilisée, uniquement sur cette zone.</p>
+          <p className="text-[11px] text-cyan-800 dark:text-cyan-400">Cyan : segmentation SNIC Sentinel-2 et classification indicative par signatures NDVI/NDRE/NDWI. Le fond affiche l'image Sentinel-2 utilisée.</p>
         </div>
       )}
     </div>

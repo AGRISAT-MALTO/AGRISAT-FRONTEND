@@ -5,7 +5,6 @@ import SimpleFieldOverlays from "./SimpleFieldOverlays";
 import Sentinel2TileLayer from "./Sentinel2TileLayer";
 import CoordinateInput from "./CoordinateInput";
 import ParcelOverlays from "./ParcelOverlays";
-import PolygonDrawer from "./PolygonDrawer";
 import ParcelCasePanel, { type AnalysisResultData, type CulturePanelTab } from "./ParcelCasePanel";
 import VegetationChartsPanel from "./VegetationChartsPanel";
 import VegetationLegend from "./VegetationLegend";
@@ -324,17 +323,6 @@ export default function SatelliteMap() {
             </div>
           )}
 
-          {/* Brand */}
-          <div className="absolute top-4 left-4 z-[800] analysis-popup px-4 py-3">
-            <div className="flex items-center gap-3">
-              <div className="w-3 h-3 rounded-full bg-primary animate-pulse" />
-              <div>
-                <h1 className="text-sm font-semibold text-foreground">AgriSat</h1>
-                <p className="text-xs text-muted-foreground">Détection IA des cultures</p>
-              </div>
-            </div>
-          </div>
-
           {/* Fond Sentinel-2 : uniquement l'image exacte de l'analyse en cours, sur la zone recherchée (pas de fond permanent) */}
           {simpleResult?.imageTimestampMs != null && (
             <Sentinel2TileLayer map={mapRef.current} imageTimestampMs={simpleResult.imageTimestampMs} />
@@ -349,9 +337,7 @@ export default function SatelliteMap() {
           {/* Orge détectée par la pipeline Sentinel-2 (segmentation SNIC) */}
           <SimpleFieldOverlays map={mapRef.current} result={simpleResult} />
 
-          <PolygonDrawer map={mapRef.current} onPolygonComplete={handlePolygonComplete} />
-
-          {/* Automatic GPS search */}
+          {/* Recherche et analyse affichées dans le panneau à droite */}
           <CoordinateInput
             onNavigate={handleNavigate}
             onSearch={handleAutomaticSearch}

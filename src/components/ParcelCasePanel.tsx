@@ -130,6 +130,11 @@ function isBarleyFromVerdict(result: Pick<AnalysisResultData, "verdict" | "is_ba
   return result.is_barley;
 }
 
+function cultureLabel(result: Pick<AnalysisResultData, "culture_detected" | "verdict" | "is_barley">): string {
+  if (result.culture_detected) return result.culture_detected;
+  return isBarleyFromVerdict(result) ? "Orge" : "Culture non identifiée";
+}
+
 function growthStageEmoji(stage: string | null | undefined): string {
   if (!stage) return "🌱";
   const s = stage.toLowerCase();
@@ -308,7 +313,7 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
         </button>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-foreground truncate">
-            {result ? `Culture : ${isBarleyFromVerdict(result) ? "Orge" : "Non-orge"}` : "Analyse de parcelle"}
+            {result ? `Culture : ${cultureLabel(result)}` : "Analyse de parcelle"}
           </p>
           <p className="text-xs text-muted-foreground mono mt-0.5">
             {surfaceHa} ha · {polygon.length} pts · {headerDate.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" })}
@@ -526,7 +531,7 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                 className="pt-2.5 border-t border-border/60 space-y-1.5 text-xs">
                 <InfoRow
                   label="Culture"
-                  value={isBarleyFromVerdict(result) ? "Orge" : "Non-orge"}
+                  value={cultureLabel(result)}
                   valueClassName={isBarleyFromVerdict(result) ? "text-vegetation-high" : "text-destructive"}
                 />
 
