@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { SimpleAnalysisResult } from "@/lib/barley-detect-simple";
+import { cursorFromMapEvent, hideFloatingCropTooltip, moveFloatingCropTooltip, resolveCropName, showFloatingCropTooltip } from "@/lib/map-tooltip";
+import { cropColor, isWaterLabel } from "@/lib/crop-colors";
 
 interface SimpleFieldOverlaysProps {
   map: google.maps.Map | null;
@@ -8,57 +10,57 @@ interface SimpleFieldOverlaysProps {
 
 export default function SimpleFieldOverlays({ map, result }: SimpleFieldOverlaysProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
-  const infoWindowRef = useRef<google.maps.InfoWindow | null>(null);
 
   useEffect(() => {
     if (!map) return;
 
     polygonsRef.current.forEach((polygon) => polygon.setMap(null));
     polygonsRef.current = [];
-    if (!infoWindowRef.current) infoWindowRef.current = new google.maps.InfoWindow();
 
     (result?.features ?? []).forEach((feature) => {
+      // Eau = vide : aucun polygone affiché (anciennes analyses en base).
+      if (isWaterLabel(feature.properties.class) || isWaterLabel(feature.properties.culture)) return;
       const ring = feature.geometry.coordinates[0];
       if (!ring || ring.length < 3) return;
       const path = ring.map(([lng, lat]) => ({ lat, lng }));
+      // Couleur de la culture détectée (vert orge, jaune maïs, rouge maraîchage...).
+      const cropName = resolveCropName(feature.properties.culture, feature.properties.meanNDVI);
+      const color = cropColor(feature.properties.class ?? cropName);
 
       const polygon = new google.maps.Polygon({
         paths: path,
-        strokeColor: "#22d3ee",
+        strokeColor: color,
         strokeWeight: 4,
         strokeOpacity: 1,
-        fillColor: "#22d3ee",
+        fillColor: color,
         fillOpacity: 0.2,
         zIndex: 20,
         map,
       });
       polygon.addListener("mouseover", (event: google.maps.PolyMouseEvent) => {
         polygon.setOptions({ fillOpacity: 0.42, strokeWeight: 5 });
-        const { culture, confidence, confirmation, confirmationMethod, alternatives, areaHa, meanNDVI, meanNDRE, meanNDWI, imageDate, imageAgeDays, cloudPercentage, barleyPresence } = feature.properties;
-        const content = document.createElement("div");
-        content.style.cssText = "font-family:'Space Grotesk',sans-serif;color:#333;min-width:180px;padding:4px";
-        const title = document.createElement("strong");
-        title.textContent = `${culture} (analyse multi-cultures) — ${Math.round(confidence * 100)}%`;
-        const details = document.createElement("div");
-        details.style.cssText = "font-size:11px;color:#666;margin-top:4px;line-height:1.6";
-        details.innerHTML = [
-          `${areaHa} ha · ${confirmation}`,
-          `Méthode : ${confirmationMethod}`,
-          `Alternatives : ${alternatives.join(" · ")}`,
-          `NDVI : ${meanNDVI != null ? meanNDVI.toFixed(2) : "—"} · NDRE : ${meanNDRE != null ? meanNDRE.toFixed(2) : "—"} · NDWI : ${meanNDWI != null ? meanNDWI.toFixed(2) : "—"}`,
-          `Image : ${imageDate ?? "—"} (${imageAgeDays ?? "?"} j) · nuages ${cloudPercentage ?? "?"}%`,
-          ...(barleyPresence !== "not_applicable" ? [`Présence d'orge : ${barleyPresence === "confirmed" ? "confirmée par degrés-jours" : "probable"}`] : []),
-        ].join("<br/>");
-        content.append(title, details);
-        if (event.latLng) {
-          infoWindowRef.current?.setContent(content);
-          infoWindowRef.current?.setPosition(event.latLng);
-          infoWindowRef.current?.open(map);
+        const { confidence, areaHa, alternatives } = feature.properties;
+        const cursor = cursorFromMapEvent(event);
+        if (cursor) {
+          const detail = Array.isArray(alternatives) && alternatives.length > 0
+            ? `${Math.round(confidence * 100)}% · ${areaHa} ha · probables : ${alternatives.join(", ")}`
+            : `${Math.round(confidence * 100)}% · ${areaHa} ha`;
+          showFloatingCropTooltip(
+            cursor.x,
+            cursor.y,
+            cropName,
+            detail,
+            color,
+          );
         }
+      });
+      polygon.addListener("mousemove", (event: google.maps.PolyMouseEvent) => {
+        const cursor = cursorFromMapEvent(event);
+        if (cursor) moveFloatingCropTooltip(cursor.x, cursor.y);
       });
       polygon.addListener("mouseout", () => {
         polygon.setOptions({ fillOpacity: 0.2, strokeWeight: 4 });
-        infoWindowRef.current?.close();
+        hideFloatingCropTooltip();
       });
       polygonsRef.current.push(polygon);
     });
@@ -66,7 +68,7 @@ export default function SimpleFieldOverlays({ map, result }: SimpleFieldOverlays
     return () => {
       polygonsRef.current.forEach((polygon) => polygon.setMap(null));
       polygonsRef.current = [];
-      infoWindowRef.current?.close();
+      hideFloatingCropTooltip();
     };
   }, [map, result]);
 

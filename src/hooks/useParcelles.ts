@@ -58,6 +58,18 @@ export interface Parcelle {
   hybrid_score: number | null;
   cnn_prob_barley: number | null;
   cnn_prob_non_barley: number | null;
+  // Suivi thermique Zadoks (colonne JSONB {sowing, phenology, harvest})
+  phenology: Record<string, unknown> | null;
+}
+
+export const PARCELLES_CHANGED_EVENT = "agrisat:parcelles-changed";
+
+export function notifyParcellesChanged() {
+  try {
+    window.dispatchEvent(new CustomEvent(PARCELLES_CHANGED_EVENT));
+  } catch {
+    // environnement sans window : ignorer.
+  }
 }
 
 export function useParcelles() {
@@ -92,6 +104,9 @@ export function useParcelles() {
       hybrid_score: typeof value.hybrid_score === "number" ? value.hybrid_score : null,
       cnn_prob_barley: typeof value.cnn_prob_barley === "number" ? value.cnn_prob_barley : null,
       cnn_prob_non_barley: typeof value.cnn_prob_non_barley === "number" ? value.cnn_prob_non_barley : null,
+      phenology: value.phenology && typeof value.phenology === "object" && !Array.isArray(value.phenology)
+        ? value.phenology as Record<string, unknown>
+        : null,
     };
   };
 
@@ -112,13 +127,46 @@ export function useParcelles() {
   useEffect(() => {
     fetchParcelles();
     const interval = window.setInterval(fetchParcelles, 30000);
-    return () => window.clearInterval(interval);
+    // Recharge quand l'onglet redevient visible, la fenêtre reprend le focus,
+    // ou une suppression/ajout est signalée (dashboard → carte, même onglet SPA).
+    const onVisible = () => { if (document.visibilityState === "visible") void fetchParcelles(); };
+    const onFocus = () => { void fetchParcelles(); };
+    const onChanged = () => { void fetchParcelles(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pageshow", onFocus);
+    window.addEventListener(PARCELLES_CHANGED_EVENT, onChanged);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onFocus);
+      window.removeEventListener(PARCELLES_CHANGED_EVENT, onChanged);
+    };
   }, [fetchParcelles]);
 
   const deleteParcelle = useCallback(async (id: string) => {
     const response = await fetch(`${API_URL}/api/parcelles/${id}`, { method: "DELETE" });
     if (!response.ok) throw new Error("Impossible de supprimer la parcelle");
     setParcelles((prev) => prev.filter((p) => p.id !== id));
+    notifyParcellesChanged();
+  }, []);
+
+  const deleteParcelles = useCallback(async (ids: string[]) => {
+    const unique = Array.from(new Set(ids));
+    const failed: string[] = [];
+    await Promise.all(unique.map(async (id) => {
+      try {
+        const response = await fetch(`${API_URL}/api/parcelles/${id}`, { method: "DELETE" });
+        if (!response.ok) failed.push(id);
+      } catch {
+        failed.push(id);
+      }
+    }));
+    const failedSet = new Set(failed);
+    setParcelles((prev) => prev.filter((p) => failedSet.has(p.id) || !unique.includes(p.id)));
+    notifyParcellesChanged();
+    if (failed.length > 0) throw new Error(`${failed.length} suppression(s) ont échoué.`);
   }, []);
 
   const addParcelle = useCallback(async (parcelle: Omit<Parcelle, "id" | "created_at">) => {
@@ -131,8 +179,9 @@ export function useParcelles() {
     const data = await response.json();
     const newP = mapRow(data);
     setParcelles((prev) => [newP, ...prev]);
+    notifyParcellesChanged();
     return newP;
   }, []);
 
-  return { parcelles, loading, deleteParcelle, addParcelle, refetch: fetchParcelles };
+  return { parcelles, loading, deleteParcelle, deleteParcelles, addParcelle, refetch: fetchParcelles };
 }

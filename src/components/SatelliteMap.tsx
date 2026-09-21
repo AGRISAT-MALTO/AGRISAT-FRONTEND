@@ -2,22 +2,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { GoogleMap, useJsApiLoader } from "@react-google-maps/api";
 import AutomaticParcelOverlays from "./AutomaticParcelOverlays";
 import SimpleFieldOverlays from "./SimpleFieldOverlays";
+import MicroParcelOverlays from "./MicroParcelOverlays";
+import MicroParcelPanel from "./MicroParcelPanel";
 import Sentinel2TileLayer from "./Sentinel2TileLayer";
 import CoordinateInput from "./CoordinateInput";
 import ParcelOverlays from "./ParcelOverlays";
 import ParcelCasePanel, { type AnalysisResultData, type CulturePanelTab } from "./ParcelCasePanel";
 import VegetationChartsPanel from "./VegetationChartsPanel";
 import VegetationLegend from "./VegetationLegend";
+import CropLegend from "./CropLegend";
 import DateMonthStrip from "./DateMonthStrip";
 import ZoningOverlay from "./ZoningOverlay";
 import { useNavigate } from "react-router-dom";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, Wheat, Trash2 } from "lucide-react";
 import brocheIconUrl from "@/img/broche.png";
 import { getDetectedBarleySegments, searchAutomaticParcels, type AutomaticParcelSearchResult } from "@/lib/automatic-parcels";
-import { runSimpleAnalysis, type SimpleAnalysisResult } from "@/lib/barley-detect-simple";
+import { runSimpleAnalysis } from "@/lib/barley-detect-simple";
+import { runMicroParcelsAnalysis, type MicroParcelFeature } from "@/lib/micro-parcels";
+import { usePersistedAnalyses } from "@/hooks/usePersistedAnalyses";
 import type { BarleyDetectionConfig } from "@/lib/barley-detection";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
-import { vegetationColor } from "@/lib/vegetation-color";
+import { cropColor } from "@/lib/crop-colors";
+import { resolveCropName } from "@/lib/map-tooltip";
 import { computeSurfaceHa } from "@/lib/geo";
 import { computeParcelZoning, type ZoningResult } from "@/lib/zoning";
 
@@ -39,7 +45,7 @@ type DrawnParcel = {
 };
 
 const mapOptions: google.maps.MapOptions = {
-  mapTypeId: "satellite",
+  mapTypeId: "hybrid",
   disableDefaultUI: true,
   zoomControl: true,
   zoomControlOptions: { position: 6 /* LEFT_BOTTOM */ },
@@ -59,9 +65,14 @@ export default function SatelliteMap() {
   const [searchResult, setSearchResult] = useState<AutomaticParcelSearchResult | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
-  const [simpleResult, setSimpleResult] = useState<SimpleAnalysisResult | null>(null);
+  // Analyses persistées en session : conservées quand on va au dashboard et retour.
+  const { simpleResult, setSimpleResult, microResult, setMicroResult } = usePersistedAnalyses();
   const [isSearchingSimple, setIsSearchingSimple] = useState(false);
   const [simpleSearchError, setSimpleSearchError] = useState("");
+  // Micro-parcelles : découpage fin suivant les clôtures + analyse par micro-zone.
+  const [isSearchingMicro, setIsSearchingMicro] = useState(false);
+  const [microSearchError, setMicroSearchError] = useState("");
+  const [selectedMicro, setSelectedMicro] = useState<MicroParcelFeature | null>(null);
   const [drawnParcel, setDrawnParcel] = useState<DrawnParcel | null>(null);
   const [selectedParcelle, setSelectedParcelle] = useState<Parcelle | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResultData | null>(null);
@@ -70,6 +81,10 @@ export default function SatelliteMap() {
   const [zoningResult, setZoningResult] = useState<ZoningResult | null>(null);
   const [zoningLoading, setZoningLoading] = useState(false);
   const [zoningError, setZoningError] = useState("");
+  // Panneaux repliables comme le panneau d'analyse (CoordinateInput) :
+  // légende des cultures (haut gauche) et bouton tableau de bord (bas gauche).
+  const [legendExpanded, setLegendExpanded] = useState(true);
+  const [dashboardExpanded, setDashboardExpanded] = useState(true);
   const caseActive = drawnParcel !== null || selectedParcelle !== null;
   const monthlyPoints = analysisResult?.time_series_s2 ?? [];
   const pointsByMonth = new Map(monthlyPoints.map((p) => [p.date, p]));
@@ -85,7 +100,41 @@ export default function SatelliteMap() {
   const effectiveMonthIndex = selectedMonthIndex ?? (lastDataMonthIndex >= 0 ? lastDataMonthIndex : months.length - 1);
   const selectedNdvi = pointsByMonth.get(months[effectiveMonthIndex])?.ndvi ?? analysisResult?.percentage ?? null;
   const navigate = useNavigate();
-  const { parcelles, addParcelle } = useParcelles();
+  const { parcelles, addParcelle, deleteParcelle, refetch } = useParcelles();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Au (re)montage de la carte (retour du dashboard en SPA : le composant a été
+  // démonté), recharge immédiate : les suppressions du dashboard s'appliquent
+  // sans attendre l'intervalle de 30 s.
+  useEffect(() => {
+    void refetch();
+  }, [refetch]);
+
+  const handleDeleteParcelle = useCallback(async (id: string) => {
+    setDeletingId(id);
+    try {
+      await deleteParcelle(id);
+      setSelectedParcelle((prev) => (prev?.id === id ? null : prev));
+    } finally {
+      setDeletingId(null);
+    }
+  }, [deleteParcelle]);
+
+  const handleDeleteMicro = useCallback((feature: MicroParcelFeature) => {
+    // Micro-zone de session (non persistée individuellement) : la retirer du
+    // résultat affiché ; le registre garde la trace horodatée côté backend.
+    setMicroResult((prev) => {
+      if (!prev) return prev;
+      const ring = feature.geometry.coordinates[0] ?? [];
+      const key = (c: number[]) => `${c[0].toFixed(6)},${c[1].toFixed(6)}`;
+      const target = ring.map(key).join("|");
+      return {
+        ...prev,
+        features: prev.features.filter((f) => (f.geometry.coordinates[0] ?? []).map(key).join("|") !== target),
+      };
+    });
+    setSelectedMicro(null);
+  }, []);
   const displayedBarleySegmentCount = searchResult?.parcels.reduce(
     (total, parcel) => total + getDetectedBarleySegments(parcel).length,
     0,
@@ -194,6 +243,21 @@ export default function SatelliteMap() {
     }
   }, []);
 
+  const handleMicroSearch = useCallback(async (lat: number, lng: number, radiusM: number, confidenceThreshold: number, gddConfig: BarleyDetectionConfig, sources: Record<string, boolean>) => {
+    setIsSearchingMicro(true);
+    setMicroSearchError("");
+    setMicroResult(null);
+    setSelectedMicro(null);
+    try {
+      const result = await runMicroParcelsAnalysis(lat, lng, radiusM, { confidenceThreshold, ...gddConfig, sources });
+      setMicroResult(result);
+    } catch (error) {
+      setMicroSearchError(error instanceof Error ? error.message : "L'analyse micro-parcelles a échoué.");
+    } finally {
+      setIsSearchingMicro(false);
+    }
+  }, []);
+
   const handlePolygonComplete = useCallback((points: Array<{ lat: number; lng: number }>, ownerName: string, notes: string) => {
     const map = mapRef.current;
     if (!map) return;
@@ -234,7 +298,11 @@ export default function SatelliteMap() {
     drawnPolygonRef.current?.setMap(null);
     drawnPolygonRef.current = null;
     if (!drawnParcel || !mapRef.current) return;
-    const color = vegetationColor(selectedNdvi);
+    // Contour dessiné : couleur de la culture analysée si connue, sinon NDVI en repli.
+    const cropName = analysisResult?.culture_detected
+      ? resolveCropName(analysisResult.culture_detected, selectedNdvi)
+      : null;
+    const color = cropName ? cropColor(cropName) : "#9ca3af";
     drawnPolygonRef.current = new google.maps.Polygon({
       paths: drawnParcel.points,
       strokeColor: color,
@@ -245,7 +313,7 @@ export default function SatelliteMap() {
       zIndex: 40,
       map: mapRef.current,
     });
-  }, [drawnParcel, selectedNdvi]);
+  }, [drawnParcel, selectedNdvi, analysisResult?.culture_detected]);
 
   // Le dock latéral (ParcelCasePanel) et le bandeau de graphiques (VegetationChartsPanel)
   // redimensionnent le conteneur de la carte : Google Maps ne redessine pas ses tuiles tout
@@ -337,9 +405,14 @@ export default function SatelliteMap() {
           {/* Orge détectée par la pipeline Sentinel-2 (segmentation SNIC) */}
           <SimpleFieldOverlays map={mapRef.current} result={simpleResult} />
 
+          {/* Micro-parcelles : découpage fin suivant les clôtures, une analyse par micro-zone */}
+          <MicroParcelOverlays map={mapRef.current} result={microResult} onSelect={setSelectedMicro} />
+
           {/* Recherche et analyse affichées dans le panneau à droite */}
           <CoordinateInput
             onNavigate={handleNavigate}
+            onClearSimple={() => setSimpleResult(null)}
+            onClearMicro={() => { setMicroResult(null); setSelectedMicro(null); }}
             onSearch={handleAutomaticSearch}
             search={searchResult}
             isSearching={isSearching}
@@ -348,6 +421,10 @@ export default function SatelliteMap() {
             simpleResult={simpleResult}
             isSearchingSimple={isSearchingSimple}
             simpleSearchError={simpleSearchError}
+            onSearchMicro={handleMicroSearch}
+            microResult={microResult}
+            isSearchingMicro={isSearchingMicro}
+            microSearchError={microSearchError}
             pickedLocation={pickedLocation}
             forceCollapse={caseActive}
           />
@@ -356,14 +433,46 @@ export default function SatelliteMap() {
             <VegetationLegend percentage={selectedNdvi} className="absolute top-16 right-4 sm:top-24" />
           )}
 
-          {/* Dashboard link */}
-          <button
-            onClick={() => navigate("/dashboard")}
-            className="absolute bottom-8 left-20 z-[850] analysis-popup px-4 py-3 flex items-center gap-2 hover:scale-105 transition-transform"
-          >
-            <BarChart3 className="w-4 h-4 text-primary" />
-            <span className="text-sm text-foreground font-medium">Tableau de bord</span>
-          </button>
+          {/* Légende : une couleur par famille de culture (repliable comme le panneau d'analyse) */}
+          {legendExpanded ? (
+            <CropLegend className="absolute top-4 left-4 hidden sm:flex" onCollapse={() => setLegendExpanded(false)} />
+          ) : (
+            <button
+              onClick={() => setLegendExpanded(true)}
+              className="absolute top-4 left-4 z-[800] analysis-popup p-3 hover:scale-105 transition-transform hidden sm:block"
+              title="Afficher la légende des cultures"
+            >
+              <Wheat className="w-5 h-5 text-primary" />
+            </button>
+          )}
+
+          {/* Dashboard link (repliable comme le panneau d'analyse) */}
+          {dashboardExpanded ? (
+            <div className="absolute bottom-8 left-20 z-[850] analysis-popup px-4 py-3 flex items-center gap-2">
+              <button
+                onClick={() => navigate("/dashboard")}
+                className="flex items-center gap-2 hover:scale-105 transition-transform"
+              >
+                <BarChart3 className="w-4 h-4 text-primary" />
+                <span className="text-sm text-foreground font-medium">Tableau de bord</span>
+              </button>
+              <button
+                onClick={() => setDashboardExpanded(false)}
+                className="w-5 h-5 flex items-center justify-center rounded-full bg-muted text-muted-foreground hover:text-foreground text-[10px]"
+                title="Masquer le bouton tableau de bord"
+              >
+                ✕
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setDashboardExpanded(true)}
+              className="absolute bottom-8 left-20 z-[850] analysis-popup p-3 hover:scale-105 transition-transform"
+              title="Afficher le bouton tableau de bord"
+            >
+              <BarChart3 className="w-5 h-5 text-primary" />
+            </button>
+          )}
 
           {searchResult && (
             <div className="absolute bottom-8 left-4 right-32 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 sm:max-w-lg z-[800] analysis-popup px-4 py-2.5 animate-fade-in">
@@ -416,6 +525,14 @@ export default function SatelliteMap() {
             setZoningResult(null);
             setZoningError("");
           }}
+          onDiscard={() => {
+            setDrawnParcel(null);
+            setAnalysisResult(null);
+            setSelectedMonthIndex(null);
+            setActiveTab("vegetation");
+            setZoningResult(null);
+            setZoningError("");
+          }}
           onSave={addParcelle}
           ownerName={drawnParcel.ownerName}
           notes={drawnParcel.notes}
@@ -433,6 +550,8 @@ export default function SatelliteMap() {
         <ParcelCasePanel
           mode="view"
           parcelle={selectedParcelle}
+          onDelete={handleDeleteParcelle}
+          deleting={deletingId === selectedParcelle.id}
           onClose={() => {
             setSelectedParcelle(null);
             setAnalysisResult(null);
@@ -447,6 +566,15 @@ export default function SatelliteMap() {
           zoningResult={zoningResult}
           zoningLoading={zoningLoading}
           zoningError={zoningError}
+          className="w-[320px] max-w-[85vw] h-full shrink-0"
+        />
+      )}
+
+      {selectedMicro && (
+        <MicroParcelPanel
+          feature={selectedMicro}
+          onDelete={handleDeleteMicro}
+          onClose={() => setSelectedMicro(null)}
           className="w-[320px] max-w-[85vw] h-full shrink-0"
         />
       )}

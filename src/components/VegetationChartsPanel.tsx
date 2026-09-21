@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { AreaChart, Area, Bar, ComposedChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { cn } from "@/lib/utils";
+import { resolveCropName } from "@/lib/map-tooltip";
 import { formatMonthLabel } from "@/lib/dates";
 import type { TimeSeriesPointS2, TimeSeriesPointRain } from "@/hooks/useParcelles";
 
@@ -53,7 +54,7 @@ export default function VegetationChartsPanel({ timeSeriesS2, timeSeriesRain, cr
           <h3 className="text-xs font-semibold text-foreground tracking-wide">VÉGÉTATION</h3>
           <div className="rounded-md bg-muted/50 px-2.5 py-2">
             <p className="text-[10px] text-muted-foreground">Culture</p>
-            <p className="text-xs font-medium text-foreground truncate">{cropLabel || "—"}</p>
+            <p className="text-xs font-medium text-foreground truncate">{resolveCropName(cropLabel) || "—"}</p>
           </div>
           <div className="rounded-md bg-muted/50 px-2.5 py-2">
             <p className="text-[10px] text-muted-foreground">Superficie</p>

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { computeSurfaceHa } from "@/lib/geo";
+import { resolveCropName } from "@/lib/map-tooltip";
+import { isWaterLabel } from "@/lib/crop-colors";
 import type { Parcelle, TimeSeriesPointS2, TimeSeriesPointS1, TimeSeriesPointRain } from "@/hooks/useParcelles";
 import type { ZoningResult } from "@/lib/zoning";
 import ZoningTabContent from "./ZoningTabContent";
@@ -10,6 +12,41 @@ import ZoningTabContent from "./ZoningTabContent";
 type AnalysisStage = "loading" | "percentage" | "verdict" | "error";
 
 export type CulturePanelTab = "vegetation" | "zoning";
+
+export interface ZadoksStage {
+  code: string | null;
+  label: string | null;
+  principal: number | null;
+  sub: number | null;
+  st: number | null;
+  stThreshold?: number | null;
+  stBeyond?: number | null;
+  phase?: string;
+  organ?: string;
+  evolution?: string;
+  st_source?: string;
+  flowering?: ZadoksStage | null;
+  stage7Reached?: boolean;
+  sowingDate?: string | null;
+  daysCounted?: number | null;
+}
+
+export interface SowingInfo {
+  sowingDate?: string | null;
+  sowingDateEarliest?: string | null;
+  sowingDateLatest?: string | null;
+  method?: string;
+  confidence?: number;
+  stTarget?: number | null;
+  zadoksCode?: string | null;
+}
+
+export interface HarvestInfo {
+  harvestDate?: string | null;
+  stAchieved?: number | null;
+  alreadyReached?: boolean;
+  method?: string;
+}
 
 export interface AnalysisResultData {
   percentage: number | null;
@@ -37,6 +74,9 @@ export interface AnalysisResultData {
   days_since_planting?: number | null;
   growth_stage?: string | null;
   planting_confidence?: number;
+  sowing?: SowingInfo | null;
+  phenology?: ZadoksStage | null;
+  harvest?: HarvestInfo | null;
   // New fields
   evi?: number | null;
   savi?: number | null;
@@ -71,12 +111,16 @@ interface AnalyzeModeProps extends ParcelCasePanelCommonProps {
   onSave: (parcelle: Omit<Parcelle, "id" | "created_at">) => Promise<Parcelle | null>;
   ownerName: string;
   notes: string;
+  /** Supprime/écarte le polygone dessiné (non encore enregistré). */
+  onDiscard?: () => void;
 }
 
 /** Réaffiche une parcelle déjà en base — aucun nouvel appel réseau, données déjà connues. */
 interface ViewModeProps extends ParcelCasePanelCommonProps {
   mode: "view";
   parcelle: Parcelle;
+  onDelete?: (id: string) => void | Promise<void>;
+  deleting?: boolean;
 }
 
 type ParcelCasePanelProps = AnalyzeModeProps | ViewModeProps;
@@ -86,6 +130,13 @@ const ANALYSIS_URL = `${import.meta.env.VITE_API_URL ?? "http://localhost:3001"}
 function resultFromParcelle(p: Parcelle): AnalysisResultData {
   const culture = p.culture_detected?.toLowerCase().trim() ?? "";
   const isBarley = culture.includes("orge") && !culture.includes("non");
+  // La colonne phenology stocke {sowing, phenology, harvest} — réhydrate les blocs.
+  const stored = (p.phenology ?? null) as unknown as {
+    sowing?: SowingInfo | null;
+    phenology?: ZadoksStage | null;
+    harvest?: HarvestInfo | null;
+  } | null;
+  const hasBlocks = !!stored && typeof stored === "object" && ("sowing" in stored || "phenology" in stored || "harvest" in stored);
   return {
     percentage: p.ndvi_percentage,
     is_barley: isBarley,
@@ -117,6 +168,9 @@ function resultFromParcelle(p: Parcelle): AnalysisResultData {
     spectral_bands: p.spectral_bands,
     agro_score: p.agro_score,
     hybrid_score: p.hybrid_score,
+    sowing: hasBlocks ? (stored?.sowing ?? null) : null,
+    phenology: hasBlocks ? (stored?.phenology ?? null) : null,
+    harvest: hasBlocks ? (stored?.harvest ?? null) : null,
   };
 }
 
@@ -130,8 +184,10 @@ function isBarleyFromVerdict(result: Pick<AnalysisResultData, "verdict" | "is_ba
   return result.is_barley;
 }
 
-function cultureLabel(result: Pick<AnalysisResultData, "culture_detected" | "verdict" | "is_barley">): string {
-  if (result.culture_detected) return result.culture_detected;
+function cultureLabel(result: Pick<AnalysisResultData, "culture_detected" | "verdict" | "is_barley" | "percentage">): string {
+  // Eau = vide : aucun nom de culture affiché.
+  if (isWaterLabel(result.culture_detected) || isWaterLabel(result.verdict)) return "Zone en eau — vide";
+  if (result.culture_detected) return resolveCropName(result.culture_detected, result.percentage ?? null);
   return isBarleyFromVerdict(result) ? "Orge" : "Culture non identifiée";
 }
 
@@ -239,6 +295,9 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
           hybrid_score: data.hybrid_score ?? null,
           cnn_prob_barley: data.cnn_prob_barley ?? null,
           cnn_prob_non_barley: data.cnn_prob_non_barley ?? null,
+          phenology: data.sowing || data.phenology || data.harvest
+            ? { sowing: data.sowing ?? null, phenology: data.phenology ?? null, harvest: data.harvest ?? null }
+            : null,
         });
         if (!cancelled && saved) setSavedId(saved.id);
 
@@ -311,7 +370,7 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
         >
           <ChevronLeft className="w-4 h-4" />
         </button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-foreground truncate">
             {result ? `Culture : ${cultureLabel(result)}` : "Analyse de parcelle"}
           </p>
@@ -319,6 +378,29 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
             {surfaceHa} ha · {polygon.length} pts · {headerDate.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" })}
           </p>
         </div>
+        {props.mode === "view" && props.onDelete && (
+          <button
+            type="button"
+            onClick={() => void props.onDelete?.(props.parcelle.id)}
+            disabled={props.deleting}
+            className="w-7 h-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0 disabled:opacity-50"
+            title="Supprimer ce polygone"
+          >
+            {props.deleting
+              ? <span className="w-3.5 h-3.5 rounded-full border-2 border-muted-foreground/40 border-t-muted-foreground animate-spin" />
+              : <Trash2 className="w-4 h-4" />}
+          </button>
+        )}
+        {props.mode === "analyze" && props.onDiscard && (
+          <button
+            type="button"
+            onClick={props.onDiscard}
+            className="w-7 h-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+            title="Supprimer ce polygone"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Nav : bascule entre la vue "Végétation Index" (Végétation + Pluie + Culture orge)
@@ -523,6 +605,35 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                     <p className="text-xs text-muted-foreground">
                       Récolte estimée : {new Date(result.estimated_harvest_date).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}
                     </p>
+                  )}
+                </motion.div>
+              )}
+
+              {/* Sommes de températures (Zadoks, TR = 0 °C) */}
+              {(result.phenology?.st != null || result.harvest?.stAchieved != null) && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }}
+                  className="pt-2.5 border-t border-border/60 space-y-1.5 text-xs">
+                  <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Sommes de températures</p>
+                  {result.phenology?.st != null && (
+                    <InfoRow
+                      label="ST cumulée"
+                      value={`${Math.round(result.phenology.st)} °C (stade ${result.phenology.code ?? "—"} · seuil ${result.phenology.stThreshold ?? "—"} °C)`}
+                    />
+                  )}
+                  {result.phenology?.flowering && (
+                    <InfoRow
+                      label="Floraison"
+                      value={`${result.phenology.flowering.code ?? "—"} · ${Math.round(result.phenology.flowering.st ?? 0)} °C`}
+                    />
+                  )}
+                  {result.harvest?.stAchieved != null && (
+                    <InfoRow
+                      label="ST récolte"
+                      value={`${Math.round(result.harvest.stAchieved)} °C / 2100 °C${result.harvest.alreadyReached ? " · atteinte" : ` · ${result.harvest.method ?? "projetée"}`}`}
+                    />
+                  )}
+                  {result.sowing?.method && (
+                    <p className="text-[10px] text-muted-foreground italic">Semis : {result.sowing.method}</p>
                   )}
                 </motion.div>
               )}

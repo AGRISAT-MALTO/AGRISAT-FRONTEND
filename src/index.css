@@ -165,6 +165,32 @@
     margin-left: 0 !important;
   }
 
+  /* Infobulle culture : supprime le cadre blanc natif Google Maps (fond, ombre,
+     flèche et bouton fermer) — seul le contenu sombre compact reste visible. */
+  .gm-style .gm-style-iw-c {
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  .gm-style .gm-style-iw-d {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .gm-style .gm-style-iw-tc,
+  .gm-style .gm-style-iw-t::before,
+  .gm-style .gm-style-iw-t::after,
+  .gm-style iframe + div[style*="pointer-events"] {
+    display: none !important;
+  }
+
+  .gm-style button.gm-ui-hover-effect {
+    display: none !important;
+  }
+
   /* Masque le bandeau d'attribution Google Maps (Keyboard shortcuts / Imagery © / Terms). */
   .gm-style-cc,
   .gm-style-cc + div {

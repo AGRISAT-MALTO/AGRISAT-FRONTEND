@@ -1,13 +1,9 @@
 import { useEffect, useRef } from "react";
 import type { Parcelle } from "@/hooks/useParcelles";
+import { cursorFromMapEvent, hideFloatingCropTooltip, moveFloatingCropTooltip, resolveCropName, showFloatingCropTooltip } from "@/lib/map-tooltip";
+import { cropColor, isWaterLabel } from "@/lib/crop-colors";
 
 export type BarleyStatus = "confirmed" | "uncertain" | "non-barley";
-
-const STATUS_COLORS: Record<BarleyStatus, string> = {
-  confirmed: "#fbbf24", // jaune — orge confirmée
-  uncertain: "#f97316", // orange — orge incertaine
-  "non-barley": "#ef4444", // rouge — non-orge
-};
 
 // Orge confirmée -> jaune ; non-orge -> rouge ; incertain -> orange (repli pour d'anciennes
 // analyses enregistrées avant le passage à deux catégories uniquement).
@@ -38,6 +34,18 @@ interface ParcelOverlaysProps {
   onSelect?: (parcelle: Parcelle) => void;
 }
 
+/** Nom de culture affiché au survol : étiquette CNN si présente, sinon verdict hybride, sinon culture déclarée. */
+function parcelCultureLabel(parcelle: Parcelle): string {
+  const detected = parcelle.culture_detected?.trim();
+  if (detected) return detected;
+  const verdict = parcelle.verdict?.toUpperCase() ?? "";
+  if (verdict.includes("NON-ORGE") || verdict.includes("NON ORGE")) return "Non-orge";
+  if (verdict.includes("ORGE")) return "Orge";
+  const declared = parcelle.culture_declared?.trim();
+  if (declared) return declared;
+  return "Culture non identifiée";
+}
+
 export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverlaysProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
   const onSelectRef = useRef(onSelect);
@@ -50,8 +58,13 @@ export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverl
     polygonsRef.current = [];
 
     parcelles.forEach((parcelle) => {
+      // Eau = vide : aucun polygone affiché (anciennes parcelles en base).
+      if (isWaterLabel(parcelle.culture_detected) || isWaterLabel(parcelle.verdict)) return;
       const path = parcelle.coordinates.map((c) => ({ lat: c.lat, lng: c.lng }));
-      const color = STATUS_COLORS[getBarleyStatus(parcelle)];
+      // Une couleur par famille de culture (vert orge, jaune maïs...) à partir
+      // du libellé résolu (normalise les anciennes valeurs stockées en base).
+      const cropName = resolveCropName(parcelCultureLabel(parcelle), parcelle.ndvi_percentage);
+      const color = cropColor(cropName);
 
       const polygon = new google.maps.Polygon({
         paths: path,
@@ -64,14 +77,32 @@ export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverl
         map,
       });
 
-      // Pas d'étiquette ni d'infobulle au survol : le clic sur le contour ouvre directement
-      // le panneau de détail existant (ParcelCasePanel), déjà fonctionnel.
-      polygon.addListener("mouseover", () => {
+      // Survol : étiquette flottante sans cadre blanc, avec le vrai nom du produit.
+      polygon.addListener("mouseover", (event: google.maps.PolyMouseEvent) => {
         polygon.setOptions({ fillOpacity: 0.42, strokeWeight: 5 });
+        const meta = typeof parcelle.confidence === "number"
+          ? `${Math.round(parcelle.confidence)}%${typeof parcelle.surface_ha === "number" ? ` · ${parcelle.surface_ha} ha` : ""}`
+          : typeof parcelle.surface_ha === "number" ? `${parcelle.surface_ha} ha` : undefined;
+        const cursor = cursorFromMapEvent(event);
+        if (cursor) {
+          showFloatingCropTooltip(
+            cursor.x,
+            cursor.y,
+            cropName,
+            meta,
+            color,
+          );
+        }
+      });
+
+      polygon.addListener("mousemove", (event: google.maps.PolyMouseEvent) => {
+        const cursor = cursorFromMapEvent(event);
+        if (cursor) moveFloatingCropTooltip(cursor.x, cursor.y);
       });
 
       polygon.addListener("mouseout", () => {
         polygon.setOptions({ fillOpacity: 0.2, strokeWeight: 4 });
+        hideFloatingCropTooltip();
       });
 
       polygon.addListener("click", () => {

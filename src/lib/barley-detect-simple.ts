@@ -4,7 +4,7 @@ export interface SimpleFieldFeature {
   type: "Feature";
   geometry: { type: "Polygon"; coordinates: number[][][] };
   properties: {
-    class: "ORGE" | "RIZ" | "MAIS" | "CEREALE" | "PDT" | "MARAICHAGE" | "AUTRE";
+    class: "ORGE" | "RIZ" | "EAU" | "BATI" | "MAIS" | "BLE" | "CEREALE" | "PDT" | "MARAICHAGE" | "LEGUMINEUSE" | "FRICHE" | "SOL_NU" | "AUTRE";
     culture: string;
     confidence: number;
     confirmation: "confirmée" | "à vérifier";

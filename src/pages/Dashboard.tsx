@@ -13,6 +13,8 @@ import { MapPinned, TriangleAlert, CheckCircle2, Search, Wheat, Activity, Map, A
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
+import { resolveCropName } from "@/lib/map-tooltip";
+import { CROP_LEGEND, cropColor, isWaterLabel } from "@/lib/crop-colors";
 
 function statusFromVerdict(verdict: string | null, culture_detected: string | null): string {
   // Le verdict (score hybride CNN+Agro, seuils orge confirmée/probable/incertain) fait foi
@@ -59,11 +61,14 @@ function maximum(values: Array<{ value: number }>): number | null {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { parcelles, loading, deleteParcelle } = useParcelles();
+  const { parcelles, loading, deleteParcelle, deleteParcelles } = useParcelles();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkError, setBulkError] = useState("");
   const [indicesView, setIndicesView] = useState<"comparison" | "separate">("separate");
 
   const enriched = useMemo(() =>
@@ -101,11 +106,12 @@ export default function Dashboard() {
   // Anomalies (non-conforme or incertain)
   const anomalies = useMemo(() => enriched.filter((p) => p.status !== "Conforme"), [enriched]);
 
-  // Culture history distribution
+  // Culture history distribution (eau = vide : exclue des stats).
   const cultureDistribution = useMemo(() => {
     const map: Record<string, number> = {};
     enriched.forEach((a) => {
-      const key = a.culture_detected || "Inconnu";
+      if (isWaterLabel(a.culture_detected) || isWaterLabel(a.verdict)) return;
+      const key = resolveCropName(a.culture_detected, a.ndvi_percentage);
       map[key] = (map[key] || 0) + 1;
     });
     return Object.entries(map).map(([name, value]) => ({ name, value }));
@@ -140,8 +146,7 @@ export default function Dashboard() {
       NDVI: a.ndvi_percentage,
     })), [enriched]);
 
-  // Pie chart colors
-  const PIE_COLORS = ["#10b981", "#ef4444", "#f59e0b", "#6b7280"];
+  // Couleurs camembert/barres = couleur officielle de chaque culture.
 
   // Radar chart data for selected parcel
   const radarData = useMemo(() => {
@@ -161,7 +166,7 @@ export default function Dashboard() {
     const sorted = [...enriched].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     return sorted.map((p) => ({
       date: new Date(p.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }),
-      culture: p.culture_detected || "Inconnu",
+      culture: resolveCropName(p.culture_detected, p.ndvi_percentage),
       ndvi: p.ndvi_percentage,
       owner: p.owner_name || "—",
     }));
@@ -172,6 +177,37 @@ export default function Dashboard() {
     await deleteParcelle(id);
     setDeleting(null);
     if (selectedId === id) setSelectedId(null);
+    setCheckedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+  };
+
+  const toggleCheck = (id: string) => {
+    setCheckedIds((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  };
+
+  const allFilteredChecked = filtered.length > 0 && filtered.every((p) => checkedIds.has(p.id));
+  const toggleCheckAll = () => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (filtered.every((p) => next.has(p.id))) filtered.forEach((p) => next.delete(p.id));
+      else filtered.forEach((p) => next.add(p.id));
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = filtered.filter((p) => checkedIds.has(p.id)).map((p) => p.id);
+    if (ids.length === 0) return;
+    setBulkDeleting(true);
+    setBulkError("");
+    try {
+      await deleteParcelles(ids);
+      setCheckedIds(new Set());
+      if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : "Suppression en lot impossible.");
+    } finally {
+      setBulkDeleting(false);
+    }
   };
 
   const kpis = [
@@ -333,9 +369,9 @@ export default function Dashboard() {
 
                       <div className="grid grid-cols-2 gap-4 text-sm">
                         <div className="bg-gray-50 rounded-lg p-3">
-                          <p className="text-xs text-gray-500">Culture (CNN)</p>
-                          <p className={`font-semibold text-base ${selected.status === "Conforme" ? "text-emerald-700" : "text-red-700"}`}>
-                            {selected.status === "Conforme" ? "🌾 Orge" : "❌ Non-orge"}
+                          <p className="text-xs text-gray-500">Culture détectée</p>
+                          <p className={`font-semibold text-base ${selected.status === "Conforme" ? "text-emerald-700" : "text-gray-900"}`}>
+                            {selected.status === "Conforme" ? "🌾 Orge" : `🌾 ${resolveCropName(selected.culture_detected, selected.ndvi_percentage)}`}
                           </p>
                         </div>
                         <div className="bg-gray-50 rounded-lg p-3">
@@ -373,7 +409,7 @@ export default function Dashboard() {
                           <TriangleAlert className="h-4 w-4 text-red-600" />
                           <AlertTitle className="text-sm font-semibold text-red-800">🚨 NON CONFORME — Pas d'orge détectée</AlertTitle>
                           <AlertDescription className="text-xs text-red-700">
-                            Culture déclarée : Orge — Culture détectée : {selected.culture_detected}. Contrôle terrain recommandé.
+                            Culture déclarée : Orge — Culture détectée : {resolveCropName(selected.culture_detected, selected.ndvi_percentage)}. Contrôle terrain recommandé.
                           </AlertDescription>
                         </Alert>
                       )}
@@ -398,7 +434,25 @@ export default function Dashboard() {
 
                       <div className="flex flex-wrap gap-2">
                         <Badge className={statusBadgeClass(selected.status)}>{statusLabel(selected.status)}</Badge>
-                        {selected.culture_detected && <Badge variant="outline" className="border-gray-300 text-gray-700">{selected.culture_detected}</Badge>}
+                        {selected.culture_detected && (
+                          <Badge
+                            variant="outline"
+                            style={{
+                              borderColor: `${cropColor(resolveCropName(selected.culture_detected, selected.ndvi_percentage))}88`,
+                              color: cropColor(resolveCropName(selected.culture_detected, selected.ndvi_percentage)),
+                            }}
+                          >
+                            {resolveCropName(selected.culture_detected, selected.ndvi_percentage)}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1">
+                        {CROP_LEGEND.map((entry) => (
+                          <span key={entry.label} className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                            <span className="w-2.5 h-2.5 rounded-sm border border-black/10" style={{ backgroundColor: entry.color }} />
+                            {entry.label}
+                          </span>
+                        ))}
                       </div>
 
                       {selected.risk_factors.length > 0 && (
@@ -444,14 +498,25 @@ export default function Dashboard() {
             {/* Right: table + charts */}
             <div className="lg:col-span-2 space-y-5">
               <Tabs defaultValue="table" className="space-y-5">
-                <TabsList className="bg-gray-100 p-1 rounded-lg">
-                  <TabsTrigger value="table" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Registre</TabsTrigger>
-                  <TabsTrigger value="indices" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Indices végétaux</TabsTrigger>
-                  <TabsTrigger value="health" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Santé des cultures</TabsTrigger>
-                  <TabsTrigger value="alerts" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Alertes</TabsTrigger>
-                  <TabsTrigger value="phenology" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Phénologie</TabsTrigger>
-                  <TabsTrigger value="history" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Historique</TabsTrigger>
-                </TabsList>
+                <div className="flex items-center gap-2">
+                  <TabsList className="bg-gray-100 p-1 rounded-lg flex-1">
+                    <TabsTrigger value="table" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Registre</TabsTrigger>
+                    <TabsTrigger value="indices" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Indices végétaux</TabsTrigger>
+                    <TabsTrigger value="health" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Santé des cultures</TabsTrigger>
+                    <TabsTrigger value="alerts" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Alertes</TabsTrigger>
+                    <TabsTrigger value="phenology" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Phénologie</TabsTrigger>
+                    <TabsTrigger value="history" className="text-sm data-[state=active]:bg-white data-[state=active:text-gray-900">Historique</TabsTrigger>
+                  </TabsList>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleCheckAll}
+                    className="gap-2 shrink-0 bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+                    title={allFilteredChecked ? "Tout désélectionner" : "Sélectionner tout le registre filtré"}
+                  >
+                    {allFilteredChecked ? "Tout désélectionner" : "Sélectionner tout"}
+                  </Button>
+                </div>
 
                 <TabsContent value="table" className="space-y-4">
                   <div className="flex flex-wrap gap-3">
@@ -477,13 +542,41 @@ export default function Dashboard() {
                     </Select>
                   </div>
 
+                  {checkedIds.size > 0 && (
+                    <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                      <span className="text-sm text-red-800 font-medium">{checkedIds.size} sélectionnée(s)</span>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => void handleBulkDelete()}
+                        disabled={bulkDeleting}
+                        className="gap-2 ml-auto"
+                      >
+                        {bulkDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                        {bulkDeleting ? "Suppression..." : "Supprimer la sélection"}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setCheckedIds(new Set())} className="text-red-700 hover:bg-red-100">
+                        Annuler
+                      </Button>
+                    </div>
+                  )}
+                  {bulkError && <p className="text-xs text-red-600">{bulkError}</p>}
                   <Card className="bg-white border-gray-200 overflow-hidden shadow-sm">
                     <Table>
                       <TableHeader className="bg-gray-50">
                         <TableRow className="border-gray-200">
+                          <TableHead className="w-10">
+                            <input
+                              type="checkbox"
+                              checked={allFilteredChecked}
+                              onChange={toggleCheckAll}
+                              className="w-4 h-4 accent-emerald-600 cursor-pointer"
+                              title={allFilteredChecked ? "Tout désélectionner" : "Sélectionner tout"}
+                            />
+                          </TableHead>
                           <TableHead className="text-gray-700 font-semibold">Propriétaire</TableHead>
                           <TableHead className="text-gray-700 font-semibold">Coordonnées</TableHead>
-                          <TableHead className="text-gray-700 font-semibold">Culture (CNN)</TableHead>
+                          <TableHead className="text-gray-700 font-semibold">Culture détectée</TableHead>
                           <TableHead className="text-gray-700 font-semibold">NDVI</TableHead>
                           <TableHead className="text-gray-700 font-semibold">EVI</TableHead>
                           <TableHead className="text-gray-700 font-semibold">Statut</TableHead>
@@ -493,11 +586,27 @@ export default function Dashboard() {
                       <TableBody>
                         {filtered.map((row) => (
                           <TableRow key={row.id} onClick={() => setSelectedId(row.id)} className="cursor-pointer border-gray-100 hover:bg-gray-50">
+                            <TableCell onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={checkedIds.has(row.id)}
+                                onChange={() => toggleCheck(row.id)}
+                                className="w-4 h-4 accent-emerald-600 cursor-pointer"
+                                title="Sélectionner cette culture"
+                              />
+                            </TableCell>
                             <TableCell className="font-medium text-gray-900">{row.owner_name || row.id.slice(0, 8)}</TableCell>
                             <TableCell className="text-sm font-mono text-gray-500">{row.center_lat.toFixed(3)}, {row.center_lng.toFixed(3)}</TableCell>
                             <TableCell>
-                              <Badge className={row.status === "Conforme" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-red-100 text-red-700 border-red-200"}>
-                                {row.status === "Conforme" ? "🌾 Orge" : "❌ Non-orge"}
+                              <Badge
+                                className="border"
+                                style={{
+                                  backgroundColor: `${cropColor(resolveCropName(row.culture_detected, row.ndvi_percentage))}1a`,
+                                  color: cropColor(resolveCropName(row.culture_detected, row.ndvi_percentage)),
+                                  borderColor: `${cropColor(resolveCropName(row.culture_detected, row.ndvi_percentage))}55`,
+                                }}
+                              >
+                                {row.status === "Conforme" ? "🌾 Orge" : `🌾 ${resolveCropName(row.culture_detected, row.ndvi_percentage)}`}
                               </Badge>
                             </TableCell>
                             <TableCell className="font-semibold text-gray-900">{row.ndvi_percentage != null ? `${row.ndvi_percentage}%` : "—"}</TableCell>
@@ -520,7 +629,7 @@ export default function Dashboard() {
                         ))}
                         {filtered.length === 0 && (
                           <TableRow>
-                            <TableCell colSpan={7} className="text-center text-gray-500 py-8">Aucun résultat</TableCell>
+                            <TableCell colSpan={8} className="text-center text-gray-500 py-8">Aucun résultat</TableCell>
                           </TableRow>
                         )}
                       </TableBody>
@@ -707,7 +816,11 @@ export default function Dashboard() {
                               <XAxis dataKey="name" tick={{ fill: "#6b7280", fontSize: 12 }} />
                               <YAxis tick={{ fill: "#6b7280", fontSize: 12 }} />
                               <Tooltip contentStyle={{ backgroundColor: "white", border: "1px solid #e5e7eb", borderRadius: 8, color: "#111827" }} />
-                              <Bar dataKey="value" fill="#10b981" radius={[4, 4, 0, 0]} />
+                              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                                {cultureDistribution.map((entry) => (
+                                  <Cell key={`bar-${entry.name}`} fill={cropColor(entry.name)} />
+                                ))}
+                              </Bar>
                             </BarChart>
                           </ResponsiveContainer>
                           <ResponsiveContainer width="100%" height={250}>
@@ -722,8 +835,8 @@ export default function Dashboard() {
                                 fill="#8884d8"
                                 dataKey="value"
                               >
-                                {cultureDistribution.map((entry, index) => (
-                                  <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                                {cultureDistribution.map((entry) => (
+                                  <Cell key={`cell-${entry.name}`} fill={cropColor(entry.name)} />
                                 ))}
                               </Pie>
                               <Tooltip contentStyle={{ backgroundColor: "white", border: "1px solid #e5e7eb", borderRadius: 8, color: "#111827" }} />
@@ -844,10 +957,10 @@ export default function Dashboard() {
                               </div>
                               <p className="text-sm text-gray-500 font-mono">{p.center_lat.toFixed(5)}, {p.center_lng.toFixed(5)} · {p.surface_ha} ha</p>
                               <p className="text-sm text-gray-600">
-                                Détectée : <span className="font-medium text-gray-900">{p.culture_detected ?? "—"}</span> · NDVI : {p.ndvi_percentage != null ? `${p.ndvi_percentage}%` : "—"} · Confiance : {p.confidence != null ? `${p.confidence}%` : "—"}
+                                Détectée : <span className="font-medium text-gray-900">{resolveCropName(p.culture_detected, p.ndvi_percentage)}</span> · NDVI : {p.ndvi_percentage != null ? `${p.ndvi_percentage}%` : "—"}
                               </p>
                               {p.culture_detected && p.culture_declared && p.culture_detected.toLowerCase() !== p.culture_declared.toLowerCase() && (
-                                <p className="text-sm text-red-600 font-medium">⚠️ Déclarée : {p.culture_declared} — Détectée : {p.culture_detected}</p>
+                                <p className="text-sm text-red-600 font-medium">⚠️ Déclarée : {p.culture_declared} — Détectée : {resolveCropName(p.culture_detected, p.ndvi_percentage)}</p>
                               )}
                               {p.notes && <p className="text-sm text-amber-600">📝 {p.notes}</p>}
                               <p className="text-sm text-gray-500 italic">{p.recommendations}</p>
@@ -860,10 +973,10 @@ export default function Dashboard() {
 
                 {/* Phenology Tab */}
                 <TabsContent value="phenology" className="space-y-5">
-                  {selected && selected.time_series_s2 && selected.time_series_s2.length > 0 ? (
+                  {selected && ((selected.time_series_s2 && selected.time_series_s2.length > 0) || selected.estimated_planting_date || (selected.phenology as unknown as { phenology?: { st?: number | null } } | null)?.phenology?.st != null) ? (
                     <>
                       {/* Planting Info Card */}
-                      {selected.estimated_planting_date && (
+                      {(selected.estimated_planting_date || (selected.phenology as unknown as { phenology?: { st?: number | null } } | null)?.phenology?.st != null) && (
                         <Card className="bg-white border-gray-200 shadow-sm">
                           <CardContent className="p-5">
                             <div className="flex items-center gap-4">
@@ -883,6 +996,30 @@ export default function Dashboard() {
                                     🗓️ Récolte estimée : {new Date(selected.estimated_harvest_date).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}
                                   </p>
                                 )}
+                                {(() => {
+                                  const stored = selected.phenology as unknown as {
+                                    sowing?: { stTarget?: number | null; method?: string };
+                                    phenology?: { st?: number | null; code?: string | null; stThreshold?: number | null; flowering?: { code?: string | null; st?: number | null } | null };
+                                    harvest?: { stAchieved?: number | null; alreadyReached?: boolean; method?: string };
+                                  } | null;
+                                  const ph = stored?.phenology;
+                                  const hv = stored?.harvest;
+                                  if (ph?.st == null && hv?.stAchieved == null) return null;
+                                  return (
+                                    <div className="text-sm text-gray-600 mt-2 space-y-0.5">
+                                      <p className="font-semibold text-gray-900">🌡️ Sommes de températures (TR = 0 °C)</p>
+                                      {ph?.st != null && (
+                                        <p>ST cumulée : <span className="font-medium">{Math.round(ph.st)} °C</span> (stade {ph.code ?? "—"} · seuil {ph.stThreshold ?? "—"} °C)</p>
+                                      )}
+                                      {ph?.flowering && (
+                                        <p>Floraison : <span className="font-medium">{ph.flowering.code ?? "—"}</span> · {ph.flowering.st != null ? `${Math.round(ph.flowering.st)} °C` : "—"}</p>
+                                      )}
+                                      {hv?.stAchieved != null && (
+                                        <p>ST récolte : <span className="font-medium">{Math.round(hv.stAchieved)} °C / 2100 °C</span>{hv.alreadyReached ? " · atteinte" : ` · ${hv.method ?? "projetée"}`}</p>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </div>
                           </CardContent>
@@ -890,6 +1027,7 @@ export default function Dashboard() {
                       )}
 
                       {/* NDVI Time Series Chart */}
+                      {selected.time_series_s2 && selected.time_series_s2.length > 0 && (
                       <Card className="bg-white border-gray-200 shadow-sm">
                         <CardHeader className="pb-2 border-b border-gray-100">
                           <CardTitle className="text-base flex items-center gap-2 font-semibold text-gray-900">
@@ -921,6 +1059,7 @@ export default function Dashboard() {
                           )}
                         </CardContent>
                       </Card>
+                      )}
 
                       {/* S1 Radar Time Series */}
                       {selected.time_series_s1 && selected.time_series_s1.some(p => p.vv != null) && (
@@ -958,31 +1097,83 @@ export default function Dashboard() {
                         <CardHeader className="pb-2 border-b border-gray-100">
                           <CardTitle className="text-base flex items-center gap-2 font-semibold text-gray-900">
                             <Calendar className="w-4 h-4 text-emerald-600" />
-                            Cycle de culture (orge : 90-120 jours)
+                            Stade de développement selon la Somme des Températures (ST)
                           </CardTitle>
+                          <p className="text-sm text-gray-500">Échelle Zadoks orge (TR = 0 °C) — positionnée par la ST cumulée depuis le semis</p>
                         </CardHeader>
                         <CardContent className="pt-5">
-                          <div className="flex gap-1">
-                            {["Semis", "Levée", "Tallage", "Montaison", "Épiaison", "Maturation", "Récolte"].map((stage) => {
-                              const isActive = selected.growth_stage === stage;
-                              const isPast = selected.growth_stage && ["Semis", "Levée", "Tallage", "Montaison", "Épiaison", "Maturation", "Récolte"]
-                                .indexOf(stage) < ["Semis", "Levée", "Tallage", "Montaison", "Épiaison", "Maturation", "Récolte"]
-                                .indexOf(selected.growth_stage);
-                              return (
-                                <div key={stage} className={`flex-1 text-center py-2 px-1 rounded text-xs font-medium transition-colors ${
-                                  isActive ? "bg-emerald-500 text-white" : isPast ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-400"
-                                }`}>
-                                  {stage}
+                          {(() => {
+                            const stored = selected.phenology as unknown as {
+                              phenology?: { st?: number | null; code?: string | null; stThreshold?: number | null; phase?: string; flowering?: { code?: string | null } | null };
+                            } | null;
+                            const st = stored?.phenology?.st;
+                            const code = stored?.phenology?.code;
+                            const principal = code && /^\d\d$/.test(code) ? Number(code[0]) : null;
+                            // Décalage des stades : Semis (0–30 °C), Germination (30–300 °C), ..., Récolte (2000–2100 °C).
+                            // Option A : Découpage avec Levée (30–100 °C) et Développement des feuilles (100–300 °C).
+                            // Stades phénologiques Zadoks orge — seuils ST depuis le semis.
+                            // Cycle complet ≈ 2000 °C (maturation complète), sénescence au-delà.
+                            // Thermal thresholds since sowing. Zadoks remains the detailed sub-stage scale.
+                            const STAGES = [
+                              { p: 0, label: "Semis", range: "0 \u00b0C" },
+                              { p: 1, label: "Germination -> Lev\u00e9e", range: "30 \u00b0C" },
+                              { p: 2, label: "D\u00e9veloppement des feuilles", range: "100-300 \u00b0C" },
+                              { p: 3, label: "Tallage", range: "450-700 \u00b0C" },
+                              { p: 4, label: "Montaison", range: "800 \u00b0C" },
+                              { p: 5, label: "Gonflement", range: "1100-1250 \u00b0C" },
+                              { p: 6, label: "\u00c9piaison", range: "1400-1550 \u00b0C" },
+                              { p: 7, label: "Floraison", range: "1450 \u00b0C - parall\u00e8le" },
+                              { p: 8, label: "Formation du grain", range: "1600 \u00b0C" },
+                              { p: 9, label: "Maturation", range: "1800-2000 \u00b0C" },
+                              { p: 10, label: "S\u00e9nescence", range: "2100 \u00b0C" },
+                            ];
+                            const hasSt = typeof st === "number";
+                            let activeP: number | null = null;
+                            if (hasSt) {
+                              if (st < 30) activeP = 0;
+                              else if (st < 100) activeP = 1;
+                              else if (st < 450) activeP = 2;
+                              else if (st < 800) activeP = 3;
+                              else if (st < 1100) activeP = 4;
+                              else if (st < 1400) activeP = 5;
+                              else if (st < 1600) activeP = 6;
+                              else if (st < 1800) activeP = 8;
+                              else if (st < 2100) activeP = 9;
+                              else activeP = 10;
+                            }
+                            return (
+                              <>
+                                <div className="space-y-3">
+                                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-1.5">
+                                  {STAGES.map((stage) => {
+                                    const isActive = hasSt && (activeP === stage.p || (stage.p === 7 && (st >= 1450 && st <= 1550 || !!stored?.phenology?.flowering)));
+                                    const isPast = hasSt && (stage.p === 7 ? st > 1550 : (activeP != null && stage.p < activeP));
+                                    return (
+                                      <div key={stage.p} className={`text-center py-2 px-1 rounded text-xs font-medium transition-colors ${
+                                        isActive ? "bg-emerald-500 text-white" : isPast ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-400"
+                                      }`}>
+                                        <span className="block">{stage.label}</span>
+                                        <span className={`block text-[10px] font-normal ${isActive ? "text-emerald-50" : "text-gray-400"}`}>{stage.range}</span>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
-                              );
-                            })}
-                          </div>
-                          {selected.days_since_planting != null && (
-                            <div className="mt-3">
-                              <Progress value={Math.min(100, (selected.days_since_planting / 110) * 100)} className="h-2 bg-gray-200" />
-                              <p className="text-xs text-gray-500 mt-1 text-center">Jour {selected.days_since_planting} / ~110</p>
-                            </div>
-                          )}
+                                {hasSt ? (
+                                  <div className="mt-3">
+                                    <Progress value={Math.min(100, (st / 2100) * 100)} className="h-2 bg-gray-200" />
+                                    <p className="text-xs text-gray-500 mt-1 text-center">
+                                      ST {Math.round(st)} °C / 2100 °C{stored?.phenology?.code ? ` · Zadoks ${stored.phenology.code}` : ""}{stored?.phenology?.flowering ? ` · Floraison ${stored.phenology.flowering.code ?? ""}` : ""}
+                                    </p>
+                                  </div>
+                                ) : selected.days_since_planting != null ? (
+                                  <div className="mt-3">
+                                    <p className="text-xs text-gray-500 mt-1 text-center">Jour {selected.days_since_planting} depuis le semis (ST indisponible)</p>
+                                  </div>
+                                ) : null}
+                                </div>
+                              </>
+                            );
+                          })()}
                         </CardContent>
                       </Card>
                     </>
@@ -1013,7 +1204,7 @@ export default function Dashboard() {
                           <XAxis dataKey="date" tick={{ fill: "#6b7280", fontSize: 12 }} />
                           <YAxis tick={{ fill: "#6b7280", fontSize: 12 }} domain={[0, 100]} />
                           <Tooltip contentStyle={{ backgroundColor: "white", border: "1px solid #e5e7eb", borderRadius: 8, color: "#111827" }}
-                            formatter={(value: any, name: string) => [value + "%", name === "ndvi" ? "NDVI" : name]} />
+                            formatter={(value: number | string, name: string) => [`${value}%`, name === "ndvi" ? "NDVI" : name]} />
                           <Area type="monotone" dataKey="ndvi" stroke="#10b981" fill="#10b981" fillOpacity={0.2} name="NDVI" />
                         </AreaChart>
                       </ResponsiveContainer>
