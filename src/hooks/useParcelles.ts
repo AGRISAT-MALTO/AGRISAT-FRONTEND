@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
+import { canDeleteParcelle } from "@/lib/outline-corrections";
+
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
 export interface TimeSeriesPointS2 {
@@ -116,10 +118,15 @@ export function useParcelles() {
   }, [fetchParcelles]);
 
   const deleteParcelle = useCallback(async (id: string) => {
+    const target = parcelles.find((p) => p.id === id);
+    if (target && !canDeleteParcelle(target)) {
+      throw new Error("Cette parcelle corrigée ne peut pas être supprimée.");
+    }
+
     const response = await fetch(`${API_URL}/api/parcelles/${id}`, { method: "DELETE" });
     if (!response.ok) throw new Error("Impossible de supprimer la parcelle");
     setParcelles((prev) => prev.filter((p) => p.id !== id));
-  }, []);
+  }, [parcelles]);
 
   const addParcelle = useCallback(async (parcelle: Omit<Parcelle, "id" | "created_at">) => {
     const response = await fetch(`${API_URL}/api/parcelles`, {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OUTLINE_CORRECTION_SOURCE, applyOutlineCorrections, pointInRing } from "@/lib/outline-corrections";
+import { OUTLINE_CORRECTION_SOURCE, applyOutlineCorrections, canDeleteParcelle, pointInRing } from "@/lib/outline-corrections";
 import type { Parcelle } from "@/hooks/useParcelles";
 import type { ZoneParcelFeature, ZoneParcelsResult } from "@/lib/zone-parcels";
 
@@ -55,6 +55,13 @@ describe("applyOutlineCorrections", () => {
   it("laisse le résultat intact sans correction", () => {
     const input = result([traced(-19.8, 47.0, 0.8)]);
     expect(applyOutlineCorrections(input, [])).toBe(input);
+  });
+});
+
+describe("canDeleteParcelle", () => {
+  it("bloque la suppression d’une parcelle modifiée manuellement", () => {
+    expect(canDeleteParcelle({ data_source: OUTLINE_CORRECTION_SOURCE } as Parcelle)).toBe(false);
+    expect(canDeleteParcelle({ data_source: "Analyse Sentinel-2" } as Parcelle)).toBe(true);
   });
 });
 

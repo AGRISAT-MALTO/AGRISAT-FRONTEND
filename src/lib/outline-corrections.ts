@@ -31,6 +31,10 @@ export function isOutlineCorrection(parcelle: Pick<Parcelle, "data_source">): bo
   return parcelle.data_source === OUTLINE_CORRECTION_SOURCE;
 }
 
+export function canDeleteParcelle(parcelle: Pick<Parcelle, "data_source">): boolean {
+  return !isOutlineCorrection(parcelle);
+}
+
 export function ringCentroid(points: LatLng[]): LatLng {
   return {
     lat: points.reduce((sum, p) => sum + p.lat, 0) / points.length,

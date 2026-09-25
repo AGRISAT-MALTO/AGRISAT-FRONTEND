@@ -13,6 +13,7 @@ import { MapPinned, TriangleAlert, CheckCircle2, Search, Wheat, Activity, Map, A
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { useParcelles, type Parcelle } from "@/hooks/useParcelles";
+import { canDeleteParcelle } from "@/lib/outline-corrections";
 
 function statusFromVerdict(verdict: string | null, culture_detected: string | null): string {
   // Le verdict (score hybride CNN+Agro, seuils orge confirmée/probable/incertain) fait foi
@@ -168,10 +169,18 @@ export default function Dashboard() {
   }, [enriched]);
 
   const handleDelete = async (id: string) => {
+    const parcel = parcelles.find((p) => p.id === id);
+    if (parcel && !canDeleteParcelle(parcel)) {
+      return;
+    }
+
     setDeleting(id);
-    await deleteParcelle(id);
-    setDeleting(null);
-    if (selectedId === id) setSelectedId(null);
+    try {
+      await deleteParcelle(id);
+      if (selectedId === id) setSelectedId(null);
+    } finally {
+      setDeleting(null);
+    }
   };
 
   const kpis = [
