@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { DEFAULT_BARLEY_DETECTION_CONFIG, type BarleyDetectionConfig } from "@/lib/barley-detection";
 import { getDetectedBarleySegments, type AutomaticParcelSearchResult } from "@/lib/automatic-parcels";
 import type { SimpleAnalysisResult } from "@/lib/barley-detect-simple";
-import { LocateFixed, MapPinned, Navigation, Radar, ThermometerSun } from "lucide-react";
+import { LocateFixed, Navigation, Radar, ThermometerSun } from "lucide-react";
 
 interface CoordinateInputProps {
   onNavigate: (lat: number, lng: number, radiusKm: number) => void;
@@ -21,12 +21,13 @@ interface CoordinateInputProps {
   /** Replie le panneau (sans empêcher une réouverture manuelle) quand il passe à true — utilisé
    * pour éviter le chevauchement avec le panneau d'analyse de parcelle dockée à droite. */
   forceCollapse?: boolean;
+  openSignal?: number;
 }
 
 export default function CoordinateInput({
   onNavigate, onSearch, search, isSearching, searchError,
   onSearchSimple, simpleResult, isSearchingSimple, simpleSearchError,
-  pickedLocation, forceCollapse,
+  pickedLocation, forceCollapse, openSignal = 0,
 }: CoordinateInputProps) {
   const [lat, setLat] = useState("-19.848219");
   const [lng, setLng] = useState("47.011882");
@@ -51,6 +52,10 @@ export default function CoordinateInput({
   useEffect(() => {
     if (forceCollapse) setExpanded(false);
   }, [forceCollapse]);
+
+  useEffect(() => {
+    if (openSignal > 0) setExpanded(true);
+  }, [openSignal]);
 
   useEffect(() => {
     if (!search) return;
@@ -185,40 +190,33 @@ export default function CoordinateInput({
   };
 
   if (!expanded) {
-    return (
-      <button
-        onClick={() => setExpanded(true)}
-        className="absolute top-4 right-4 z-[800] analysis-popup p-3 hover:scale-105 transition-transform"
-        title="Rechercher des parcelles autour d’une coordonnée"
-      >
-        <MapPinned className="w-5 h-5 text-primary" />
-      </button>
-    );
+    return null;
   }
 
   return (
-    <div className="absolute top-4 right-4 bottom-24 sm:bottom-auto z-[800] analysis-popup p-4 w-[min(20rem,calc(100vw-2rem))] max-h-none sm:max-h-[calc(100vh-2rem)] overflow-y-auto">
-      <div className="flex items-center justify-between mb-3">
+    <div className="absolute top-4 right-4 bottom-24 sm:bottom-auto z-[800] w-[min(20rem,calc(100vw-2rem))] max-h-none overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 text-slate-900 shadow-xl sm:max-h-[calc(100vh-2rem)]">
+      <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Radar className="w-4 h-4 text-primary" />
-          <span className="text-sm font-semibold text-foreground">Recherche automatique</span>
+          <Radar className="h-4 w-4 text-emerald-600" />
+          <span className="text-sm font-semibold text-slate-800">Recherche automatique</span>
         </div>
         <button
           onClick={() => setExpanded(false)}
-          className="w-6 h-6 flex items-center justify-center rounded-full bg-muted text-muted-foreground hover:text-foreground text-xs"
+          aria-label="Fermer le formulaire"
+          className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-800"
         >
           ✕
         </button>
       </div>
       <form onSubmit={handleSubmit} className="space-y-2">
-        {locationError && <p className="text-xs text-destructive">{locationError}</p>}
+        {locationError && <p className="text-xs text-red-600">{locationError}</p>}
         <Input
           type="number"
           step="any"
           placeholder="Latitude (ex. -18.8792)"
           value={lat}
           onChange={(e) => setLat(e.target.value)}
-          className="bg-background/50 text-sm h-9"
+          className="h-9 border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400"
         />
         <Input
           type="number"
@@ -226,9 +224,9 @@ export default function CoordinateInput({
           placeholder="Longitude (ex. 47.5079)"
           value={lng}
           onChange={(e) => setLng(e.target.value)}
-          className="bg-background/50 text-sm h-9"
+          className="h-9 border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400"
         />
-        <label className="block text-xs text-muted-foreground">
+        <label className="block text-xs text-slate-600">
           Rayon terrain réel
           <div className="mt-1 flex gap-1">
             <Input
@@ -238,42 +236,42 @@ export default function CoordinateInput({
               step={radiusUnit === "m" ? "10" : "0.05"}
               value={radiusValue}
               onChange={(e) => setRadiusValue(e.target.value)}
-              className="bg-background/50 text-sm h-9 flex-1"
+              className="h-9 flex-1 border-slate-200 bg-white text-sm text-slate-900"
             />
             <select
               value={radiusUnit}
               onChange={(e) => setRadiusUnit(e.target.value as "m" | "km")}
-              className="h-9 rounded-md border border-input bg-background/50 px-2 text-sm text-foreground"
+              className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900"
             >
               <option value="m">m</option>
               <option value="km">km</option>
             </select>
           </div>
-          <span className="mt-1 block text-[11px]">Distance au sol, indépendante du zoom · 50 m à 20 km</span>
+          <span className="mt-1 block text-[11px] text-slate-500">Distance au sol, indépendante du zoom · 50 m à 20 km</span>
         </label>
-        <div className="rounded-lg border border-border/70 bg-muted/40 p-2.5 space-y-2">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <ThermometerSun className="w-3.5 h-3.5 text-primary" />
+        <div className="space-y-2 rounded-xl border border-emerald-100 bg-emerald-50/70 p-2.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-slate-800">
+            <ThermometerSun className="h-3.5 w-3.5 text-emerald-600" />
             Paramètres degrés-jours
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <label className="text-[11px] text-muted-foreground">
+            <label className="text-[11px] text-slate-600">
               Tbase (°C)
-              <Input type="number" min="-20" max="30" step="0.1" value={baseTemperature} onChange={(e) => setBaseTemperature(e.target.value)} className="mt-1 h-8 text-xs bg-background/70" />
+              <Input type="number" min="-20" max="30" step="0.1" value={baseTemperature} onChange={(e) => setBaseTemperature(e.target.value)} className="mt-1 h-8 border-slate-200 bg-white text-xs text-slate-900" />
             </label>
-            <label className="text-[11px] text-muted-foreground">
+            <label className="text-[11px] text-slate-600">
               Seuil nécessaire (°C)
-              <Input type="number" min={DEFAULT_BARLEY_DETECTION_CONFIG.threshold} max="10000" step="1" value={threshold} onChange={(e) => setThreshold(e.target.value)} className="mt-1 h-8 text-xs bg-background/70" />
+              <Input type="number" min={DEFAULT_BARLEY_DETECTION_CONFIG.threshold} max="10000" step="1" value={threshold} onChange={(e) => setThreshold(e.target.value)} className="mt-1 h-8 border-slate-200 bg-white text-xs text-slate-900" />
             </label>
           </div>
-          <label className="block text-[11px] text-muted-foreground">
+          <label className="block text-[11px] text-slate-600">
             Période de culture (jours)
-            <Input type="number" min="1" max="730" step="1" value={periodDays} onChange={(e) => setPeriodDays(e.target.value)} className="mt-1 h-8 text-xs bg-background/70" />
+            <Input type="number" min="1" max="730" step="1" value={periodDays} onChange={(e) => setPeriodDays(e.target.value)} className="mt-1 h-8 border-slate-200 bg-white text-xs text-slate-900" />
           </label>
         </div>
-        {validationError && <p className="text-xs text-destructive">{validationError}</p>}
-        {searchError && <p className="text-xs text-destructive">{searchError}</p>}
-        <Button type="submit" size="sm" className="w-full gap-2" disabled={isSearching}>
+        {validationError && <p className="text-xs text-red-600">{validationError}</p>}
+        {searchError && <p className="text-xs text-red-600">{searchError}</p>}
+        <Button type="submit" size="sm" className="w-full gap-2 bg-emerald-600 text-white hover:bg-emerald-700" disabled={isSearching}>
           {isSearching
             ? <span key="icon" className="w-3.5 h-3.5 rounded-full border-2 border-primary-foreground/40 border-t-primary-foreground animate-spin" />
             : <Navigation key="icon" className="w-4 h-4" />}
@@ -288,7 +286,7 @@ export default function CoordinateInput({
             <span className="text-xs font-mono text-muted-foreground">{(simpleResult.radiusM / 1000).toFixed(2)} km</span>
           </div>
           <div className="grid grid-cols-2 gap-2 text-center">
-            <div className="rounded-md bg-background/60 p-2">
+              <div className="rounded-md bg-white p-2">
               <p className="text-lg font-semibold text-foreground">{simpleResult.candidatesFound}</p>
               <p className="text-[10px] text-muted-foreground">candidats</p>
             </div>

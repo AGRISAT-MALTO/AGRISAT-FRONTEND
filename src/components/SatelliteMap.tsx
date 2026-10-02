@@ -16,7 +16,9 @@ import ZoneCropsOverlay from "./ZoneCropsOverlay";
 import { fetchZoneCrops, tracedParcelsForCrops, type ZoneCropsResult } from "@/lib/zone-crops";
 import FtwParcelsOverlay from "./FtwParcelsOverlay";
 import { useNavigate } from "react-router-dom";
-import { BarChart3 } from "lucide-react";
+import { toast } from "sonner";
+import { BarChart3, Eye, EyeOff, Loader2, LocateFixed, Minus, Pencil, Plus, Radar, Waypoints } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import brocheIconUrl from "@/img/broche.png";
 import {
   searchAutomaticParcels,
@@ -64,8 +66,7 @@ type DrawnParcel = {
 const mapOptions: google.maps.MapOptions = {
   mapTypeId: "satellite",
   disableDefaultUI: true,
-  zoomControl: true,
-  zoomControlOptions: { position: 6 /* LEFT_BOTTOM */ },
+  zoomControl: false,
   mapTypeControl: false,
   streetViewControl: false,
   fullscreenControl: false,
@@ -75,6 +76,13 @@ export default function SatelliteMap() {
   const mapRef = useRef<google.maps.Map | null>(null);
   const searchAreaRef = useRef<google.maps.Circle | null>(null);
   const cursorMarkerRef = useRef<google.maps.Marker | null>(null);
+  // Marqueur « ma position » : posé par le bouton au-dessus du zoom, déplacé à chaque nouvelle mesure.
+  const userMarkerRef = useRef<google.maps.Marker | null>(null);
+  const [isLocatingMe, setIsLocatingMe] = useState(false);
+  const [showCityNames, setShowCityNames] = useState(false);
+  const [editParcelMode, setEditParcelMode] = useState(false);
+  const [startDrawingSignal, setStartDrawingSignal] = useState(0);
+  const [openAnalysisSignal, setOpenAnalysisSignal] = useState(0);
   const drawnPolygonRef = useRef<google.maps.Polygon | null>(null);
   const [located, setLocated] = useState(false);
   const [pinMarker, setPinMarker] = useState<google.maps.Marker | null>(null);
@@ -145,6 +153,10 @@ export default function SatelliteMap() {
     libraries: LIBRARIES,
   });
 
+  useEffect(() => {
+    mapRef.current?.setMapTypeId(showCityNames ? "hybrid" : "satellite");
+  }, [showCityNames]);
+
   const placeCursorMarker = useCallback((map: google.maps.Map, latlng: google.maps.LatLngLiteral) => {
     if (cursorMarkerRef.current) {
       cursorMarkerRef.current.setPosition(latlng);
@@ -169,6 +181,51 @@ export default function SatelliteMap() {
       cursorMarkerRef.current = marker;
     }
     setPickedLocation(latlng);
+  }, []);
+
+  // Bouton « afficher ma position » : géolocalisation du navigateur, marqueur bleu
+  // sur la carte puis recentrage. Mêmes messages d'erreur que CoordinateInput.
+  const handleShowMyPosition = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!("geolocation" in navigator)) {
+      toast.error("La géolocalisation n’est pas disponible sur cet appareil.");
+      return;
+    }
+    setIsLocatingMe(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const latlng = { lat: position.coords.latitude, lng: position.coords.longitude };
+        if (userMarkerRef.current) {
+          userMarkerRef.current.setPosition(latlng);
+        } else {
+          // Point bleu : halo (précision approximative) + centre plein, lisible sur l'image satellite.
+          const dot = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">'
+            + '<circle cx="13" cy="13" r="10" fill="#2563eb" fill-opacity="0.3"/>'
+            + '<circle cx="13" cy="13" r="5" fill="#2563eb" stroke="white" stroke-width="2"/></svg>');
+          userMarkerRef.current = new google.maps.Marker({
+            position: latlng,
+            map,
+            zIndex: 998,
+            icon: { url: dot },
+            title: "Votre position",
+          });
+        }
+        map.panTo(latlng);
+        if ((map.getZoom() ?? 0) < 15) map.setZoom(16);
+        setIsLocatingMe(false);
+      },
+      (error) => {
+        setIsLocatingMe(false);
+        toast.error(
+          error.code === error.PERMISSION_DENIED
+            ? "Accès à la position refusé. Autorisez la localisation dans votre navigateur."
+            : "Impossible de récupérer votre position."
+        );
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   }, []);
 
   const onMapLoad = useCallback((map: google.maps.Map) => {
@@ -300,12 +357,13 @@ export default function SatelliteMap() {
   // Clic sur une parcelle tracée automatiquement : son contour passe en édition, dans sa
   // couleur, puis sa nouvelle forme est enregistrée telle quelle en base, sans analyse.
   const handleEditTracedOutline = useCallback((_feature: unknown, points: LatLng[], style: OutlineStyle) => {
-    if (points.length < 3 || drawingRef.current) return;
+    if (!editParcelMode || points.length < 3 || drawingRef.current) return;
+    setEditParcelMode(false);
     setDrawnParcel(null);
     setSelectedParcelle(null);
     setAnalysisResult(null);
     setEditingOutline({ points, style });
-  }, []);
+  }, [editParcelMode]);
 
   // Parcelle déjà corrigée qu'on retouche : la nouvelle forme remplace l'ancienne en base.
   const previousCorrections = useMemo(
@@ -450,7 +508,72 @@ export default function SatelliteMap() {
   }
 
   return (
-    <div className="relative w-full h-full flex overflow-hidden">
+    <div className="relative w-full h-full flex overflow-hidden bg-transparent">
+      <aside className="absolute left-2 top-4 z-[850] flex h-fit w-12 flex-col items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-50/95 px-1 py-3 shadow-lg shadow-slate-900/5 backdrop-blur-sm">
+        <img src="/logo-1.png" alt="AgriSat" title="AgriSat" className="mb-2 h-10 w-10 rounded-xl object-contain" />
+        <button
+          type="button"
+          onClick={() => setEditParcelMode((active) => !active)}
+          aria-pressed={editParcelMode}
+          title="Modifier une parcelle : activez puis sélectionnez son contour"
+          aria-label="Modifier une parcelle"
+          className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${editParcelMode ? "bg-emerald-100 text-emerald-800" : "text-slate-600 hover:bg-white hover:text-slate-900"}`}
+        >
+          <Pencil className="h-5 w-5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setEditParcelMode(false);
+            setEditingOutline(null);
+            setStartDrawingSignal((signal) => signal + 1);
+          }}
+          title="Tracer une parcelle"
+          aria-label="Tracer une parcelle"
+          className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-600 transition-colors hover:bg-white hover:text-slate-900"
+        >
+          <Waypoints className="h-5 w-5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate("/dashboard")}
+          title="Tableau de bord"
+          aria-label="Tableau de bord"
+          className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-600 transition-colors hover:bg-white hover:text-slate-900"
+        >
+          <BarChart3 className="h-5 w-5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpenAnalysisSignal((signal) => signal + 1)}
+          title="Afficher le formulaire d’analyse de zone"
+          aria-label="Afficher le formulaire d’analyse de zone"
+          className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-600 transition-colors hover:bg-white hover:text-slate-900"
+        >
+          <Radar className="h-5 w-5" />
+        </button>
+        <div className="my-1 h-px w-full bg-slate-200" />
+        <button
+          type="button"
+          onClick={() => setShowCityNames((visible) => !visible)}
+          aria-pressed={showCityNames}
+          title={showCityNames ? "Masquer le nom des villes" : "Afficher le nom des villes"}
+          aria-label={showCityNames ? "Masquer le nom des villes" : "Afficher le nom des villes"}
+          className={`flex h-10 w-10 items-center justify-center rounded-xl transition-colors ${showCityNames ? "bg-emerald-100 text-emerald-800" : "text-slate-600 hover:bg-white hover:text-slate-900"}`}
+        >
+          {showCityNames ? <Eye className="h-5 w-5" /> : <EyeOff className="h-5 w-5" />}
+        </button>
+        <button
+          type="button"
+          onClick={handleShowMyPosition}
+          disabled={isLocatingMe}
+          title="Afficher ma position"
+          aria-label="Afficher ma position"
+          className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-600 transition-colors hover:bg-white hover:text-slate-900 disabled:opacity-50"
+        >
+          {isLocatingMe ? <Loader2 className="h-5 w-5 animate-spin" /> : <LocateFixed className="h-5 w-5" />}
+        </button>
+      </aside>
       <div className="relative flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
         <div className="relative flex-1 min-h-0 overflow-hidden">
           <GoogleMap
@@ -474,14 +597,34 @@ export default function SatelliteMap() {
             </div>
           )}
 
-          {/* Brand */}
-          <div className="absolute top-4 left-4 z-[800] analysis-popup px-4 py-3">
-            <div className="flex items-center gap-3">
-              <div className="w-3 h-3 rounded-full bg-primary animate-pulse" />
-              <div>
-                <h1 className="text-sm font-semibold text-foreground">AgriSat</h1>
-                <p className="text-xs text-muted-foreground">Détection IA des cultures</p>
-              </div>
+          {/* Commandes de zoom */}
+          <div className="absolute bottom-12 left-3 z-[800] flex flex-col items-center gap-1.5">
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-md">
+              <button
+                type="button"
+                onClick={() => {
+                  const map = mapRef.current;
+                  if (map) map.setZoom((map.getZoom() ?? DEFAULT_ZOOM) + 1);
+                }}
+                title="Zoom avant"
+                aria-label="Zoom avant"
+                className="flex h-9 w-9 items-center justify-center text-gray-900 transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Plus className="h-5 w-5" />
+              </button>
+              <div className="h-px bg-gray-200" />
+              <button
+                type="button"
+                onClick={() => {
+                  const map = mapRef.current;
+                  if (map) map.setZoom((map.getZoom() ?? DEFAULT_ZOOM) - 1);
+                }}
+                title="Zoom arrière"
+                aria-label="Zoom arrière"
+                className="flex h-9 w-9 items-center justify-center text-gray-900 transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Minus className="h-5 w-5" />
+              </button>
             </div>
           </div>
 
@@ -530,6 +673,7 @@ export default function SatelliteMap() {
           ) : (
             <PolygonDrawer
               map={mapRef.current}
+              startSignal={startDrawingSignal}
               onPolygonComplete={handlePolygonComplete}
               onDrawingChange={handleDrawingChange}
             />
@@ -548,20 +692,12 @@ export default function SatelliteMap() {
             simpleSearchError={simpleSearchError}
             pickedLocation={pickedLocation}
             forceCollapse={caseActive}
+            openSignal={openAnalysisSignal}
           />
 
           {caseActive && analysisResult && (
             <VegetationLegend percentage={selectedNdvi} className="absolute top-16 right-4 sm:top-24" />
           )}
-
-          {/* Dashboard link */}
-          <button
-            onClick={() => navigate("/dashboard")}
-            className="absolute bottom-8 left-20 z-[850] analysis-popup px-4 py-3 flex items-center gap-2 hover:scale-105 transition-transform"
-          >
-            <BarChart3 className="w-4 h-4 text-primary" />
-            <span className="text-sm text-foreground font-medium">Tableau de bord</span>
-          </button>
 
           {/* Zones VRA (onglet "Proche en zone") : raster NDVI classé, superposé sur la carte */}
           <ZoningOverlay map={mapRef.current} result={activeTab === "zoning" ? zoningResult : null} />

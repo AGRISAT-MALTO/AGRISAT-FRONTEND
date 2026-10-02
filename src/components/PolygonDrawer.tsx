@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 interface PolygonDrawerProps {
   map: google.maps.Map | null;
+  startSignal: number;
   onPolygonComplete: (
     points: Array<{ lat: number; lng: number }>,
     ownerName: string,
@@ -15,7 +16,7 @@ interface PolygonDrawerProps {
   onDrawingChange?: (drawing: boolean) => void;
 }
 
-export default function PolygonDrawer({ map, onPolygonComplete, onDrawingChange }: PolygonDrawerProps) {
+export default function PolygonDrawer({ map, startSignal, onPolygonComplete, onDrawingChange }: PolygonDrawerProps) {
   const [drawing, setDrawing] = useState(false);
 
   useEffect(() => {
@@ -137,6 +138,10 @@ export default function PolygonDrawer({ map, onPolygonComplete, onDrawingChange 
     if (map) map.setOptions({ draggableCursor: "" });
   }, [cleanup, map]);
 
+  useEffect(() => {
+    if (startSignal > 0 && !drawing) startDrawing();
+  }, [startSignal, drawing, startDrawing]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -175,19 +180,8 @@ export default function PolygonDrawer({ map, onPolygonComplete, onDrawingChange 
     );
   }
 
-  return (
+  return drawing ? (
     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[800] flex gap-2">
-      {!drawing ? (
-        <Button
-          onClick={startDrawing}
-          size="sm"
-          className="gap-2 analysis-popup border-0 bg-card/95 text-foreground hover:bg-muted"
-        >
-          <Pencil className="w-4 h-4 text-primary" />
-          Tracer une parcelle
-        </Button>
-      ) : (
-        <>
           <Button
             onClick={showFormStep}
             size="sm"
@@ -202,8 +196,6 @@ export default function PolygonDrawer({ map, onPolygonComplete, onDrawingChange 
             <Trash2 className="w-4 h-4" />
             Annuler
           </Button>
-        </>
-      )}
     </div>
-  );
+  ) : null;
 }
