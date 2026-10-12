@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Undo2, X } from "lucide-react";
+import { Check, Trash2, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,6 +23,7 @@ interface ParcelOutlineEditorProps {
   initialOwnerName?: string;
   initialNotes?: string;
   onSave: (points: LatLng[], ownerName: string, notes: string) => Promise<void>;
+  onDelete?: () => Promise<void>;
   onCancel: () => void;
 }
 
@@ -33,6 +34,7 @@ export default function ParcelOutlineEditor({
   initialOwnerName = "",
   initialNotes = "",
   onSave,
+  onDelete,
   onCancel,
 }: ParcelOutlineEditorProps) {
   const polygonRef = useRef<google.maps.Polygon | null>(null);
@@ -49,6 +51,18 @@ export default function ParcelOutlineEditor({
       await onSave(points, ownerName.trim(), notes.trim());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Enregistrement impossible");
+      setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!onDelete || !window.confirm("Supprimer définitivement cette parcelle ?")) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onDelete();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Suppression impossible");
       setSaving(false);
     }
   };
@@ -121,6 +135,11 @@ export default function ParcelOutlineEditor({
       />
       {error && <p className="text-xs text-destructive">{error}</p>}
       <div className="flex gap-2">
+        {onDelete && (
+          <Button onClick={remove} size="sm" variant="destructive" title="Supprimer cette parcelle" disabled={saving}>
+            <Trash2 className="w-4 h-4" />
+          </Button>
+        )}
         <Button onClick={save} size="sm" className="flex-1 gap-2" disabled={points.length < 3 || saving}>
           <Check className="w-4 h-4" />
           {saving ? "Enregistrement..." : "Enregistrer"}

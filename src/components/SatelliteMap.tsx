@@ -34,8 +34,10 @@ import { computeSurfaceHa } from "@/lib/geo";
 import { computeParcelZoning, type ZoningResult } from "@/lib/zoning";
 import {
   OUTLINE_CORRECTION_SOURCE,
+  OUTLINE_SUPPRESSION_SOURCE,
   applyOutlineCorrections,
   isOutlineCorrection,
+  isOutlineSuppression,
   sameParcel,
   type LatLng,
   type OutlineStyle,
@@ -47,6 +49,7 @@ const DEFAULT_CENTER = { lat: -19.848219, lng: 47.011882 };
 const DEFAULT_ZOOM = 4;
 const TARGET_ZOOM = 16;
 const ANALYSIS_VIEWPORT_PADDING = 1.25;
+const MANUAL_PARCEL_SOURCE = "Tracé manuel";
 // Délimitation automatique des parcelles visibles à l'écran (modèle JECAM sur
 // image THR, /api/zone-parcels) : lancée à l'ouverture et à chaque arrêt de la
 // carte, zone par zone, sans passer par une analyse. Fields of The World reste
@@ -62,6 +65,54 @@ type DrawnParcel = {
   ownerName: string;
   notes: string;
 };
+
+type EditingOutline = { points: LatLng[]; style: OutlineStyle; savedParcelle?: Parcelle };
+
+function unanalyzedParcelInput(
+  points: LatLng[],
+  ownerName: string,
+  notes: string,
+  dataSource: string,
+): Omit<Parcelle, "id" | "created_at"> {
+  const center = polygonCenter(points);
+  return {
+    label: ownerName,
+    coordinates: points,
+    center_lat: center.lat,
+    center_lng: center.lng,
+    surface_ha: Math.round(computeSurfaceHa(points) * 100) / 100,
+    culture_declared: "",
+    culture_detected: null,
+    ndvi_percentage: null,
+    ndre: null,
+    spectral_bands: null,
+    confidence: null,
+    verdict: null,
+    details: null,
+    saison: null,
+    soil_type: null,
+    risk_factors: [],
+    recommendations: null,
+    data_source: dataSource,
+    owner_name: ownerName,
+    notes,
+    time_series_s2: [],
+    time_series_s1: [],
+    time_series_rain: [],
+    estimated_planting_date: null,
+    estimated_harvest_date: null,
+    days_since_planting: null,
+    growth_stage: null,
+    planting_confidence: null,
+    evi: null,
+    savi: null,
+    ndwi: null,
+    agro_score: null,
+    hybrid_score: null,
+    cnn_prob_barley: null,
+    cnn_prob_non_barley: null,
+  };
+}
 
 const mapOptions: google.maps.MapOptions = {
   mapTypeId: "satellite",
@@ -95,7 +146,7 @@ export default function SatelliteMap() {
   const [simpleSearchError, setSimpleSearchError] = useState("");
   const [drawnParcel, setDrawnParcel] = useState<DrawnParcel | null>(null);
   // Contour tracé automatiquement en cours de correction, avant analyse et enregistrement.
-  const [editingOutline, setEditingOutline] = useState<{ points: LatLng[]; style: OutlineStyle } | null>(null);
+  const [editingOutline, setEditingOutline] = useState<EditingOutline | null>(null);
   // Pendant un dessin manuel, un clic sur un contour tracé ne doit pas ouvrir l'édition.
   const drawingRef = useRef(false);
   const handleDrawingChange = useCallback((drawing: boolean) => {
@@ -137,13 +188,20 @@ export default function SatelliteMap() {
   const { parcelles, addParcelle, deleteParcelle } = useParcelles();
   // Contours corrigés à la main : ils remplacent les parcelles tracées qu'ils recouvrent
   // (même couleur, nouvelle forme) au lieu d'être dessinés comme parcelles enregistrées.
-  const outlineCorrections = useMemo(() => parcelles.filter(isOutlineCorrection), [parcelles]);
-  const savedParcelles = useMemo(() => parcelles.filter((p) => !isOutlineCorrection(p)), [parcelles]);
+  const outlineOverrides = useMemo(
+    () => parcelles.filter((p) => isOutlineCorrection(p) || isOutlineSuppression(p)),
+    [parcelles],
+  );
+  const outlineCorrections = useMemo(() => outlineOverrides.filter(isOutlineCorrection), [outlineOverrides]);
+  const savedParcelles = useMemo(
+    () => parcelles.filter((p) => !isOutlineCorrection(p) && !isOutlineSuppression(p)),
+    [parcelles],
+  );
   // Le rechargement périodique des parcelles recrée le tableau : on ne recalcule le
   // traçage corrigé (et donc la carte des cultures) que si les corrections changent.
-  const correctionsKey = outlineCorrections.map((c) => c.id).join(",");
+  const correctionsKey = outlineOverrides.map((c) => c.id).join(",");
   const tracedParcels = useMemo(
-    () => applyOutlineCorrections(rawTracedParcels, outlineCorrections),
+    () => applyOutlineCorrections(rawTracedParcels, outlineOverrides),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rawTracedParcels, correctionsKey],
   );
@@ -340,19 +398,25 @@ export default function SatelliteMap() {
     }
   }, [loadZoneCrops, tracedParcels]);
 
-  const handlePolygonComplete = useCallback((points: Array<{ lat: number; lng: number }>, ownerName: string, notes: string) => {
+  const handlePolygonComplete = useCallback(async (points: LatLng[], ownerName: string, notes: string) => {
     const map = mapRef.current;
     if (!map) return;
     const bounds = new google.maps.LatLngBounds();
     points.forEach((point) => bounds.extend(point));
     map.fitBounds(bounds);
+    const saved = await addParcelle(
+      unanalyzedParcelInput(points, ownerName, notes, MANUAL_PARCEL_SOURCE),
+    );
+    toast.success("Parcelle enregistrée sans analyse.");
+    setDrawnParcel(null);
     setSelectedParcelle(null);
+    setAnalysisResult(null);
     setSelectedMonthIndex(null);
     setActiveTab("vegetation");
     setZoningResult(null);
     setZoningError("");
-    setDrawnParcel({ points, center: polygonCenter(points), ownerName, notes });
-  }, []);
+    setSelectedParcelle(saved);
+  }, [addParcelle]);
 
   // Clic sur une parcelle tracée automatiquement : son contour passe en édition, dans sa
   // couleur, puis sa nouvelle forme est enregistrée telle quelle en base, sans analyse.
@@ -365,6 +429,25 @@ export default function SatelliteMap() {
     setEditingOutline({ points, style });
   }, [editParcelMode]);
 
+  const handleEditSavedParcelle = useCallback((parcelle: Parcelle) => {
+    if (!editParcelMode || drawingRef.current) return;
+    setEditParcelMode(false);
+    setDrawnParcel(null);
+    setSelectedParcelle(null);
+    setAnalysisResult(null);
+    setEditingOutline({
+      points: parcelle.coordinates,
+      style: {
+        strokeColor: "#fbbf24",
+        strokeWeight: 3,
+        strokeOpacity: 1,
+        fillColor: "#fbbf24",
+        fillOpacity: 0.18,
+      },
+      savedParcelle: parcelle,
+    });
+  }, [editParcelMode]);
+
   // Parcelle déjà corrigée qu'on retouche : la nouvelle forme remplace l'ancienne en base.
   const previousCorrections = useMemo(
     () => (editingOutline ? outlineCorrections.filter((c) => sameParcel(c.coordinates, editingOutline.points)) : []),
@@ -372,49 +455,42 @@ export default function SatelliteMap() {
   );
 
   const handleOutlineSave = useCallback(async (points: LatLng[], ownerName: string, notes: string) => {
-    const center = polygonCenter(points);
-    await addParcelle({
-      label: ownerName,
-      coordinates: points,
-      center_lat: center.lat,
-      center_lng: center.lng,
-      surface_ha: Math.round(computeSurfaceHa(points) * 100) / 100,
-      culture_declared: "",
-      culture_detected: null,
-      ndvi_percentage: null,
-      ndre: null,
-      spectral_bands: null,
-      confidence: null,
-      verdict: null,
-      details: null,
-      saison: null,
-      soil_type: null,
-      risk_factors: [],
-      recommendations: null,
-      data_source: OUTLINE_CORRECTION_SOURCE,
-      owner_name: ownerName,
+    const savedParcelle = editingOutline?.savedParcelle;
+    await addParcelle(unanalyzedParcelInput(
+      points,
+      ownerName,
       notes,
-      time_series_s2: [],
-      time_series_s1: [],
-      time_series_rain: [],
-      estimated_planting_date: null,
-      estimated_harvest_date: null,
-      days_since_planting: null,
-      growth_stage: null,
-      planting_confidence: null,
-      evi: null,
-      savi: null,
-      ndwi: null,
-      agro_score: null,
-      hybrid_score: null,
-      cnn_prob_barley: null,
-      cnn_prob_non_barley: null,
-    });
+      savedParcelle ? (savedParcelle.data_source || MANUAL_PARCEL_SOURCE) : OUTLINE_CORRECTION_SOURCE,
+    ));
+    if (savedParcelle) {
+      await deleteParcelle(savedParcelle.id);
+      toast.success("Contour modifié et enregistré.");
+      setEditingOutline(null);
+      return;
+    }
     // La nouvelle forme est enregistrée avant de supprimer l'ancienne : un échec ici
     // laisse au pire un doublon, jamais une parcelle perdue.
     await Promise.all(previousCorrections.map((c) => deleteParcelle(c.id)));
     setEditingOutline(null);
-  }, [addParcelle, deleteParcelle, previousCorrections]);
+  }, [addParcelle, deleteParcelle, editingOutline, previousCorrections]);
+
+  const handleDeleteEditingParcelle = useCallback(async () => {
+    const target = editingOutline?.savedParcelle;
+    if (target) {
+      await deleteParcelle(target.id);
+    } else if (editingOutline) {
+      // Les contours automatiques ne sont pas des lignes supprimables en base.
+      // Enregistre leur géométrie comme exclusion pour qu'ils restent masqués après rechargement.
+      await addParcelle(unanalyzedParcelInput(
+        editingOutline.points,
+        "",
+        "Contour automatique masqué par l’utilisateur.",
+        OUTLINE_SUPPRESSION_SOURCE,
+      ));
+    }
+    setEditingOutline(null);
+    toast.success(target ? "Parcelle supprimée." : "Contour masqué durablement.");
+  }, [addParcelle, deleteParcelle, editingOutline]);
 
   const handleSelectParcelle = useCallback((parcelle: Parcelle) => {
     setEditingOutline(null);
@@ -634,7 +710,15 @@ export default function SatelliteMap() {
           )}
 
           {/* Parcelles enregistrées dans la base de données — cliquables pour rouvrir leur fiche */}
-          <ParcelOverlays map={mapRef.current} parcelles={savedParcelles} onSelect={handleSelectParcelle} />
+          <ParcelOverlays
+            map={mapRef.current}
+            parcelles={editingOutline?.savedParcelle
+              ? savedParcelles.filter((p) => p.id !== editingOutline.savedParcelle?.id)
+              : savedParcelles}
+            onSelect={handleSelectParcelle}
+            onEdit={handleEditSavedParcelle}
+            editMode={editParcelMode}
+          />
 
           {/* Parcels discovered from the GPS search */}
           <AutomaticParcelOverlays map={mapRef.current} parcels={searchResult?.parcels ?? []} />
@@ -665,9 +749,10 @@ export default function SatelliteMap() {
               map={mapRef.current}
               initialPoints={editingOutline.points}
               style={editingOutline.style}
-              initialOwnerName={previousCorrections[0]?.owner_name}
-              initialNotes={previousCorrections[0]?.notes}
+              initialOwnerName={editingOutline.savedParcelle?.owner_name ?? previousCorrections[0]?.owner_name}
+              initialNotes={editingOutline.savedParcelle?.notes ?? previousCorrections[0]?.notes}
               onSave={handleOutlineSave}
+              onDelete={handleDeleteEditingParcelle}
               onCancel={() => setEditingOutline(null)}
             />
           ) : (

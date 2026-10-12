@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { OUTLINE_CORRECTION_SOURCE, applyOutlineCorrections, canDeleteParcelle, pointInRing } from "@/lib/outline-corrections";
+import {
+  OUTLINE_CORRECTION_SOURCE,
+  OUTLINE_SUPPRESSION_SOURCE,
+  applyOutlineCorrections,
+  canDeleteParcelle,
+  pointInRing,
+} from "@/lib/outline-corrections";
 import type { Parcelle } from "@/hooks/useParcelles";
 import type { ZoneParcelFeature, ZoneParcelsResult } from "@/lib/zone-parcels";
 
@@ -56,11 +62,30 @@ describe("applyOutlineCorrections", () => {
     const input = result([traced(-19.8, 47.0, 0.8)]);
     expect(applyOutlineCorrections(input, [])).toBe(input);
   });
+
+  it("masque durablement un contour automatique supprimé", () => {
+    const hidden = { ...correction("hidden", square(-19.8, 47.0)), data_source: OUTLINE_SUPPRESSION_SOURCE } as Parcelle;
+    const out = applyOutlineCorrections(result([traced(-19.8, 47.0, 0.8), traced(-19.81, 47.0, 0.05)]), [hidden]);
+    expect(out!.geojson.features).toHaveLength(1);
+    expect(out!.geojson.features[0].properties.parcel_id).toBe("P-" + -19.81);
+  });
+
+  it("ne réaffiche pas une correction dont le contour a été supprimé", () => {
+    const points = square(-19.8, 47.0);
+    const correctionOverride = correction("corrected", points);
+    const suppression = {
+      ...correction("hidden", points),
+      data_source: OUTLINE_SUPPRESSION_SOURCE,
+    } as Parcelle;
+    const out = applyOutlineCorrections(result([traced(-19.8, 47.0, 0.8)]), [correctionOverride, suppression]);
+    expect(out!.geojson.features).toHaveLength(0);
+  });
 });
 
 describe("canDeleteParcelle", () => {
   it("bloque la suppression d’une parcelle modifiée manuellement", () => {
     expect(canDeleteParcelle({ data_source: OUTLINE_CORRECTION_SOURCE } as Parcelle)).toBe(false);
+    expect(canDeleteParcelle({ data_source: OUTLINE_SUPPRESSION_SOURCE } as Parcelle)).toBe(false);
     expect(canDeleteParcelle({ data_source: "Analyse Sentinel-2" } as Parcelle)).toBe(true);
   });
 });

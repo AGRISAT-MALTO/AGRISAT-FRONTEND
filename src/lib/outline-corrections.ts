@@ -26,13 +26,18 @@ export interface OutlineStyle {
 }
 
 export const OUTLINE_CORRECTION_SOURCE = "Tracé automatique corrigé";
+export const OUTLINE_SUPPRESSION_SOURCE = "Tracé automatique supprimé";
 
 export function isOutlineCorrection(parcelle: Pick<Parcelle, "data_source">): boolean {
   return parcelle.data_source === OUTLINE_CORRECTION_SOURCE;
 }
 
+export function isOutlineSuppression(parcelle: Pick<Parcelle, "data_source">): boolean {
+  return parcelle.data_source === OUTLINE_SUPPRESSION_SOURCE;
+}
+
 export function canDeleteParcelle(parcelle: Pick<Parcelle, "data_source">): boolean {
-  return !isOutlineCorrection(parcelle);
+  return !isOutlineCorrection(parcelle) && !isOutlineSuppression(parcelle);
 }
 
 export function ringCentroid(points: LatLng[]): LatLng {
@@ -88,19 +93,27 @@ function correctionFeature(correction: Parcelle, properties: ZoneParcelFeature["
 
 export function applyOutlineCorrections(
   result: ZoneParcelsResult | null,
-  corrections: Parcelle[],
+  overrides: Parcelle[],
 ): ZoneParcelsResult | null {
-  if (!result || corrections.length === 0) return result;
+  if (!result || overrides.length === 0) return result;
+
+  const corrections = overrides.filter(isOutlineCorrection);
+  const suppressions = overrides.filter(isOutlineSuppression);
+  if (corrections.length === 0 && suppressions.length === 0) return result;
+  const visibleCorrections = corrections.filter(
+    (correction) => !suppressions.some((suppression) => sameParcel(suppression.coordinates, correction.coordinates)),
+  );
 
   const inherited = new Map<string, ZoneParcelFeature["properties"]>();
   const kept = result.geojson.features.filter((feature) => {
     const ring = outerRing(feature);
+    if (ring && suppressions.some((suppression) => sameParcel(suppression.coordinates, ring))) return false;
     const match = ring && corrections.find((correction) => sameParcel(correction.coordinates, ring));
     if (!match) return true;
     if (!inherited.has(match.id)) inherited.set(match.id, feature.properties);
     return false;
   });
 
-  const features = [...kept, ...corrections.map((c) => correctionFeature(c, inherited.get(c.id)))];
+  const features = [...kept, ...visibleCorrections.map((c) => correctionFeature(c, inherited.get(c.id)))];
   return { ...result, geojson: { ...result.geojson, features } };
 }

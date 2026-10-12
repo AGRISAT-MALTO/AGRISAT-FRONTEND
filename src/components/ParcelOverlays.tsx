@@ -36,12 +36,19 @@ interface ParcelOverlaysProps {
   parcelles: Parcelle[];
   /** Appelé au clic sur une parcelle — ouvre son panneau de détail avec les données déjà en base. */
   onSelect?: (parcelle: Parcelle) => void;
+  /** En mode modification, le clic ouvre directement l'éditeur du contour enregistré. */
+  onEdit?: (parcelle: Parcelle) => void;
+  editMode?: boolean;
 }
 
-export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverlaysProps) {
+export default function ParcelOverlays({ map, parcelles, onSelect, onEdit, editMode = false }: ParcelOverlaysProps) {
   const polygonsRef = useRef<google.maps.Polygon[]>([]);
   const onSelectRef = useRef(onSelect);
+  const onEditRef = useRef(onEdit);
+  const editModeRef = useRef(editMode);
   onSelectRef.current = onSelect;
+  onEditRef.current = onEdit;
+  editModeRef.current = editMode;
 
   useEffect(() => {
     if (!map) return;
@@ -60,7 +67,7 @@ export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverl
         strokeOpacity: 0.98,
         fillColor: color,
         fillOpacity: 0.2,
-        zIndex: 10,
+        zIndex: editMode ? 100 : 10,
         map,
       });
 
@@ -75,7 +82,8 @@ export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverl
       });
 
       polygon.addListener("click", () => {
-        onSelectRef.current?.(parcelle);
+        if (editModeRef.current) onEditRef.current?.(parcelle);
+        else onSelectRef.current?.(parcelle);
       });
 
       polygonsRef.current.push(polygon);
@@ -85,7 +93,7 @@ export default function ParcelOverlays({ map, parcelles, onSelect }: ParcelOverl
       polygonsRef.current.forEach((p) => p.setMap(null));
       polygonsRef.current = [];
     };
-  }, [map, parcelles]);
+  }, [map, parcelles, editMode]);
 
   return null;
 }

@@ -11,7 +11,7 @@ interface PolygonDrawerProps {
     points: Array<{ lat: number; lng: number }>,
     ownerName: string,
     notes: string
-  ) => void;
+  ) => Promise<void>;
   /** Prévenu quand le dessin commence ou s'arrête. */
   onDrawingChange?: (drawing: boolean) => void;
 }
@@ -23,6 +23,8 @@ export default function PolygonDrawer({ map, startSignal, onPolygonComplete, onD
     onDrawingChange?.(drawing);
   }, [drawing, onDrawingChange]);
   const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [ownerName, setOwnerName] = useState("");
   const [notes, setNotes] = useState("");
   const [pointCount, setPointCount] = useState(0);
@@ -103,18 +105,26 @@ export default function PolygonDrawer({ map, startSignal, onPolygonComplete, onD
     [map, updatePolyline, showFormStep]
   );
 
-  const finishPolygon = useCallback(() => {
-    if (pointsRef.current.length < 3) return;
+  const finishPolygon = useCallback(async () => {
+    if (pointsRef.current.length < 3 || saving) return;
     const pts = [...pointsRef.current];
     const name = ownerName.trim();
     const note = notes.trim();
-    cleanup();
-    setDrawing(false);
-    setShowForm(false);
-    setOwnerName("");
-    setNotes("");
-    onPolygonComplete(pts, name, note);
-  }, [cleanup, onPolygonComplete, ownerName, notes]);
+    setSaving(true);
+    setSaveError("");
+    try {
+      await onPolygonComplete(pts, name, note);
+      cleanup();
+      setDrawing(false);
+      setShowForm(false);
+      setOwnerName("");
+      setNotes("");
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Impossible d’enregistrer la parcelle.");
+    } finally {
+      setSaving(false);
+    }
+  }, [cleanup, onPolygonComplete, ownerName, notes, saving]);
 
   const startDrawing = useCallback(() => {
     if (!map) return;
@@ -126,6 +136,7 @@ export default function PolygonDrawer({ map, startSignal, onPolygonComplete, onD
   }, [map, cleanup, handleMapClick]);
 
   const cancelDrawing = useCallback(() => {
+    if (saving) return;
     cleanup();
     setDrawing(false);
     setShowForm(false);
@@ -136,7 +147,7 @@ export default function PolygonDrawer({ map, startSignal, onPolygonComplete, onD
       listenerRef.current = null;
     }
     if (map) map.setOptions({ draggableCursor: "" });
-  }, [cleanup, map]);
+  }, [cleanup, map, saving]);
 
   useEffect(() => {
     if (startSignal > 0 && !drawing) startDrawing();
@@ -167,12 +178,13 @@ export default function PolygonDrawer({ map, startSignal, onPolygonComplete, onD
           onChange={(e) => setNotes(e.target.value)}
           className="bg-background/50 text-sm min-h-[60px]"
         />
+        {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
         <div className="flex gap-2">
-          <Button onClick={finishPolygon} size="sm" className="flex-1 gap-2">
+          <Button onClick={finishPolygon} size="sm" className="flex-1 gap-2" disabled={saving}>
             <Check className="w-4 h-4" />
-            Analyser ({pointCount} pts)
+            {saving ? "Enregistrement…" : `Enregistrer (${pointCount} pts)`}
           </Button>
-          <Button onClick={cancelDrawing} size="sm" variant="outline" className="gap-2">
+          <Button onClick={cancelDrawing} size="sm" variant="outline" className="gap-2" disabled={saving}>
             <Trash2 className="w-4 h-4" />
           </Button>
         </div>

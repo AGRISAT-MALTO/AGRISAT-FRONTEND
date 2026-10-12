@@ -15,6 +15,7 @@ export interface AnalysisResultData {
   percentage: number | null;
   is_barley: boolean;
   verdict: string;
+  analysis_available?: boolean;
   details: string;
   culture_detected: string | null;
   confidence: number | null;
@@ -86,9 +87,22 @@ const ANALYSIS_URL = `${import.meta.env.VITE_API_URL ?? "http://localhost:3001"}
 function resultFromParcelle(p: Parcelle): AnalysisResultData {
   const culture = p.culture_detected?.toLowerCase().trim() ?? "";
   const isBarley = culture.includes("orge") && !culture.includes("non");
+  const analysisAvailable = Boolean(
+    p.verdict?.trim()
+    || culture
+    || p.ndvi_percentage != null
+    || p.confidence != null
+    || p.hybrid_score != null
+    || p.evi != null
+    || p.savi != null
+    || p.ndwi != null
+    || p.ndre != null
+    || p.time_series_s2.length > 0,
+  );
   return {
     percentage: p.ndvi_percentage,
     is_barley: isBarley,
+    analysis_available: analysisAvailable,
     verdict: p.verdict ?? "",
     details: p.details ?? "",
     culture_detected: p.culture_detected,
@@ -316,7 +330,11 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
         </button>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-foreground truncate">
-            {result ? `Culture : ${isBarleyFromVerdict(result) ? "Orge" : "Non-orge"}` : "Analyse de parcelle"}
+            {result?.analysis_available === false
+              ? "Parcelle enregistrée"
+              : result
+                ? `Culture : ${isBarleyFromVerdict(result) ? "Orge" : "Non-orge"}`
+                : "Analyse de parcelle"}
           </p>
           <p className="text-xs text-muted-foreground mono mt-0.5">
             {surfaceHa} ha · {polygon.length} pts · {headerDate.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" })}
@@ -435,6 +453,13 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
 
           {stage === "verdict" && result && (
             <motion.div key="verdict" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-3">
+              {result.analysis_available === false ? (
+                <div className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+                  Parcelle enregistrée. Aucune analyse de culture n’a été effectuée.
+                  {savedId && <p className="mt-2 text-accent font-medium">Sauvegardé en base de données</p>}
+                </div>
+              ) : (
+                <>
               {/* NDVI + Hybrid Score */}
               <div className="flex items-center gap-4">
                 <div>
@@ -559,6 +584,8 @@ export default function ParcelCasePanel(props: ParcelCasePanelProps) {
                   <p className="text-accent font-medium pt-1">Sauvegardé en base de données</p>
                 )}
               </motion.div>
+                </>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
